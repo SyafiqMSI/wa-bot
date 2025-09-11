@@ -1,0 +1,17 @@
+.store.db
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+.env.production
+.env.local
+.env.development.local
+
+./store.db
+
+go.mod
+go.sum
+docker-compose.yml
