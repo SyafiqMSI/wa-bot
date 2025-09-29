@@ -15,3 +15,12 @@
 go.mod
 go.sum
 docker-compose.yml
+
+.air.toml
+
+store.db
+/tmp
+
+memory.json
+
+*.exe
