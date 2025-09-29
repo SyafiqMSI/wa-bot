@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -79,7 +80,7 @@ func handleGetGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups, err := WaClient.GetJoinedGroups()
+	groups, err := WaClient.GetJoinedGroups(context.Background())
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

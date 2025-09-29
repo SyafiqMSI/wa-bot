@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"os"
 
+	_ "github.com/glebarez/sqlite"
 	"github.com/joho/godotenv"
-	_ "github.com/mattn/go-sqlite3"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	"whatsmeow-api/handler"
+	"wa-bot/handler"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 		log.Printf("Failed to initialize memory store: %v", err)
 	}
 
-	container, err := sqlstore.New(ctx, "sqlite3", "file:store.db?_foreign_keys=on", logger)
+	container, err := sqlstore.New(ctx, "sqlite", "file:store.db?_pragma=foreign_keys(1)", logger)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}

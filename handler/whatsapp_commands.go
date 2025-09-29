@@ -207,7 +207,7 @@ func handleGroupsCommand(v *events.Message) {
 	}
 
 	// Get all groups
-	groups, err := WaClient.GetJoinedGroups()
+	groups, err := WaClient.GetJoinedGroups(context.Background())
 	if err != nil {
 		log.Printf("Failed to get joined groups: %v", err)
 		sendMessageWithRetry(context.Background(), v.Info.Chat, "❌ Gagal mengambil daftar grup: "+err.Error(), 2)
