@@ -4,13 +4,17 @@ WORKDIR /app
 
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 
-COPY go.mod go.sum ./
+# Copy go mod files first for better caching
+COPY go.mod ./
+COPY go.sum ./
 
 RUN go mod download
 
+# Copy the rest of the application
 COPY . .
 
-RUN go build -o wa-bot
+# Build the application
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o wa-bot .
 
 FROM alpine:3.20
 
