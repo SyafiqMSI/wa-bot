@@ -34,11 +34,45 @@ type GeminiCandidate struct {
 	Content GeminiContent `json:"content"`
 }
 
+// Image generation structures for Gemini 2.5 Flash Image
+type GeminiImageRequest struct {
+	Contents []GeminiContent `json:"contents"`
+}
+
+type GeminiImageResponse struct {
+	Candidates []GeminiImageCandidate `json:"candidates"`
+}
+
+type GeminiImageCandidate struct {
+	Content GeminiImageContent `json:"content"`
+}
+
+type GeminiImageContent struct {
+	Parts []GeminiImagePart `json:"parts"`
+}
+
+type GeminiImagePart struct {
+	Text           string                `json:"text,omitempty"`
+	InlineData     *GeminiInlineData     `json:"inlineData,omitempty"`
+	ExecutableCode *GeminiExecutableCode `json:"executableCode,omitempty"`
+}
+
+type GeminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
+type GeminiExecutableCode struct {
+	Language string `json:"language"`
+	Code     string `json:"code"`
+}
+
 // GeminiClient holds the configuration for Gemini API
 type GeminiClient struct {
-	APIKey     string
-	BaseURL    string
-	HTTPClient *http.Client
+	APIKey       string
+	BaseURL      string
+	ImageBaseURL string
+	HTTPClient   *http.Client
 }
 
 // NewGeminiClient creates a new Gemini client
@@ -49,10 +83,11 @@ func NewGeminiClient() *GeminiClient {
 	}
 
 	return &GeminiClient{
-		APIKey:  apiKey,
-		BaseURL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+		APIKey:       apiKey,
+		BaseURL:      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+		ImageBaseURL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent",
 		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second, // Increased timeout for image generation
 		},
 	}
 }
@@ -261,4 +296,131 @@ func GetGeminiResponseWithMemory(ctx context.Context, chatJID string, assistantN
 	}
 
 	return reply, nil
+}
+
+// GenerateImage sends a prompt to Gemini 2.5 Flash Image model and returns base64 encoded image
+func (c *GeminiClient) GenerateImage(ctx context.Context, prompt string) (string, error) {
+	if c.APIKey == "" {
+		return "", fmt.Errorf("gemini API key not configured")
+	}
+
+	// Create image generation prompt
+	imagePrompt := fmt.Sprintf("Generate an image based on this description: %s", prompt)
+
+	// Prepare request payload with generation config for image generation
+	requestData := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]interface{}{
+					{
+						"text": imagePrompt,
+					},
+				},
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+		},
+	}
+
+	// Convert to JSON
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal image request: %v", err)
+	}
+
+	// Create HTTP request
+	url := fmt.Sprintf("%s?key=%s", c.ImageBaseURL, c.APIKey)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to create image request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	log.Printf("Sending image generation request to Gemini API...")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to send image request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	log.Printf("Gemini API response status: %d", resp.StatusCode)
+
+	// Read response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read image response: %v", err)
+	}
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		// Handle rate limiting specifically
+		if resp.StatusCode == 429 {
+			return "", fmt.Errorf("quota gemini habis atau rate limit tercapai. Silakan coba lagi nanti (status: %d)", resp.StatusCode)
+		}
+		return "", fmt.Errorf("gemini image API error: %s (status: %d)", string(body), resp.StatusCode)
+	}
+
+	// Parse response as generic map to handle flexible structure
+	var response map[string]interface{}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("failed to parse image response: %v", err)
+	}
+
+	// Extract candidates
+	candidates, ok := response["candidates"].([]interface{})
+	if !ok || len(candidates) == 0 {
+		return "", fmt.Errorf("no candidates in response")
+	}
+
+	candidate, ok := candidates[0].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid candidate format")
+	}
+
+	content, ok := candidate["content"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("no content in candidate")
+	}
+
+	parts, ok := content["parts"].([]interface{})
+	if !ok || len(parts) == 0 {
+		return "", fmt.Errorf("no parts in content")
+	}
+
+	// Look for image data in parts
+	for _, partInterface := range parts {
+		part, ok := partInterface.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check for inline data (image)
+		if inlineData, exists := part["inlineData"]; exists {
+			inlineDataMap, ok := inlineData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			mimeType, _ := inlineDataMap["mimeType"].(string)
+			data, _ := inlineDataMap["data"].(string)
+
+			if mimeType != "" && data != "" {
+				log.Printf("Found image data with mimeType: %s", mimeType)
+				return data, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no image data found in response")
+}
+
+// GetGeminiImage is a convenience function to generate image from Gemini
+func GetGeminiImage(ctx context.Context, prompt string) (string, error) {
+	if geminiClient == nil {
+		InitGemini()
+	}
+	return geminiClient.GenerateImage(ctx, prompt)
 }

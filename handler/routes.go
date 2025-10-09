@@ -184,6 +184,8 @@ func EventHandler(evt interface{}) {
 			handleApikCommand(v, message)
 		} else if hasCommandPrefix(message, "/idx") || hasCommandPrefix(message, "!idx") {
 			handleIDXCommand(v)
+		} else if hasCommandPrefix(message, "/img") || hasCommandPrefix(message, "!img") {
+			handleImgCommand(v, message)
 		}
 	default:
 		// Untuk event lain, tampilkan seperti biasa

@@ -50,6 +50,9 @@ Mengulang pesan yang dikirim
 *!idx* atau */idx*
 Menampilkan data pasar saham IDX hari ini
 
+*!img [deskripsi]* atau */img [deskripsi]*
+Membuat gambar AI berdasarkan deskripsi yang diberikan
+
 *💡 Tips:*
 - Semua perintah bisa menggunakan ! atau /
 - Bot akan merespons secara otomatis
@@ -369,4 +372,69 @@ func handleIDXCommand(v *events.Message) {
 	if err := sendMessageWithRetry(context.Background(), v.Info.Chat, response, 2); err != nil {
 		log.Printf("Failed to send IDX response: %v", err)
 	}
+}
+
+// Handle img command - Generate image using Gemini 2.5 Flash Image
+func handleImgCommand(v *events.Message, originalMessage string) {
+	if !WaClient.IsConnected() {
+		return
+	}
+
+	// Extract prompt after "!img " or "/img "
+	var prompt string
+	if strings.HasPrefix(strings.ToLower(originalMessage), "!img ") {
+		prompt = strings.TrimSpace(originalMessage[5:]) // Remove "!img "
+	} else if strings.HasPrefix(strings.ToLower(originalMessage), "/img ") {
+		prompt = strings.TrimSpace(originalMessage[5:]) // Remove "/img "
+	} else {
+		// If no prompt provided, send help
+		sendMessageWithRetry(context.Background(), v.Info.Chat, "🎨 *Generator Gambar AI*\n\nHalo! Saya dapat membuat gambar berdasarkan deskripsi Anda.\n\nCara menggunakan:\n• `!img [deskripsi gambar]`\n• `!img pemandangan gunung dengan matahari terbenam`\n• `!img kucing lucu bermain di taman`\n\nContoh: `!img robot futuristik di kota masa depan`", 2)
+		return
+	}
+
+	if prompt == "" {
+		sendMessageWithRetry(context.Background(), v.Info.Chat, "🎨 *Generator Gambar AI*\n\nHalo! Saya dapat membuat gambar berdasarkan deskripsi Anda.\n\nCara menggunakan:\n• `!img [deskripsi gambar]`\n• `!img pemandangan gunung dengan matahari terbenam`\n• `!img kucing lucu bermain di taman`\n\nContoh: `!img robot futuristik di kota masa depan`", 2)
+		return
+	}
+
+	// Send generating message first
+	sendMessageWithRetry(context.Background(), v.Info.Chat, "🎨 *Sedang membuat gambar...*\n\nMohon tunggu sebentar ya, saya sedang membuat gambar berdasarkan deskripsi Anda. Proses ini mungkin membutuhkan waktu 30-60 detik.", 2)
+
+	// Generate image using Gemini 2.5 Flash Image
+	imageBase64, err := GetGeminiImage(context.Background(), prompt)
+	if err != nil {
+		log.Printf("Failed to generate image: %v", err)
+		if strings.Contains(err.Error(), "API key not configured") {
+			sendMessageWithRetry(context.Background(), v.Info.Chat, "❌ *Error:* API_KEY_GEMINI belum dikonfigurasi di environment variable.\n\nSilakan set environment variable API_KEY_GEMINI dengan Google Gemini API key Anda.", 2)
+			return
+		}
+		if strings.Contains(err.Error(), "quota") || strings.Contains(err.Error(), "rate limit") {
+			sendMessageWithRetry(context.Background(), v.Info.Chat, "⏳ *Quota Gemini Habis*\n\nMaaf, quota API Gemini untuk hari ini sudah habis atau rate limit tercapai. Silakan coba lagi nanti (biasanya reset setiap 24 jam) atau upgrade ke paid plan untuk quota lebih besar.", 2)
+			return
+		}
+		sendMessageWithRetry(context.Background(), v.Info.Chat, "❌ *Maaf,* terjadi kesalahan saat membuat gambar. Silakan coba lagi nanti atau gunakan deskripsi yang lebih sederhana.", 2)
+		return
+	}
+
+	// Create caption for the image
+	caption := fmt.Sprintf("🎨 *Gambar AI Generated*\n\nPrompt: %s\n\nDibuat menggunakan Gemini 2.0 Flash Preview Image Generation", prompt)
+
+	// Send the generated image
+	err = sendImageWithRetry(context.Background(), v.Info.Chat, imageBase64, caption, 3)
+	if err != nil {
+		log.Printf("Failed to send generated image: %v", err)
+
+		// Check if it was sent as data URL, thumbnail, or fallback message
+		if strings.Contains(err.Error(), "data URL") || strings.Contains(err.Error(), "fallback message") || strings.Contains(err.Error(), "thumbnail") {
+			log.Printf("Image sent successfully (as data URL, thumbnail, or fallback)")
+			return
+		}
+
+		// Send fallback message with instructions
+		fallbackMessage := fmt.Sprintf("🎨 *Gambar Berhasil Dibuat*\n\nPrompt: %s\n\n❌ *Gagal Mengirim Gambar*\n\nGambar berhasil dibuat oleh AI tetapi gagal dikirim ke WhatsApp. Kemungkinan penyebab:\n• Ukuran file terlalu besar\n• Masalah koneksi\n• Format tidak didukung\n\nSilakan coba lagi dengan deskripsi yang lebih sederhana atau tunggu beberapa saat.", prompt)
+		sendMessageWithRetry(context.Background(), v.Info.Chat, fallbackMessage, 2)
+		return
+	}
+
+	log.Printf("Successfully generated and sent image for prompt: %s", prompt)
 }
