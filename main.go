@@ -34,7 +34,12 @@ func main() {
 		log.Printf("Failed to initialize memory store: %v", err)
 	}
 
-	container, err := sqlstore.New(ctx, "sqlite", "file:store.db?_pragma=foreign_keys(1)", logger)
+	// Ensure session directory exists
+	if err := os.MkdirAll("session", 0755); err != nil {
+		log.Fatalf("Failed to create session directory: %v", err)
+	}
+
+	container, err := sqlstore.New(ctx, "sqlite", "file:session/store.db?_pragma=foreign_keys(1)", logger)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
