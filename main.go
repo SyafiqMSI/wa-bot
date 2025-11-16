@@ -13,7 +13,7 @@ import (
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	"wa-bot/handler"
+	"whatsmeow-api/handler"
 )
 
 func main() {

@@ -144,6 +144,14 @@ func EventHandler(evt interface{}) {
 		// 	return
 		// }
 
+		// Skip if this group is in NO_RESPONSE list
+		if v.Info.IsGroup {
+			if shouldIgnoreGroup(v.Info.Chat.String()) {
+				log.Printf("🚫 Ignoring command from ignored group: %s", v.Info.Chat.String())
+				return
+			}
+		}
+
 		// Tampilkan informasi pesan yang masuk
 		// if v.Info.IsGroup {
 		// 	log.Printf("📱 GROUP MESSAGE - JID: %s", v.Info.Chat.String())
@@ -173,7 +181,7 @@ func EventHandler(evt interface{}) {
 		} else if hasCommandPrefix(message, "/info") || hasCommandPrefix(message, "!info") {
 			handleInfoCommand(v)
 		} else if hasCommandPrefix(message, "/groups") || hasCommandPrefix(message, "!groups") {
-			handleGroupsCommand(v)
+			handleGroupsCommand(v, message)
 		} else if hasCommandPrefix(message, "/test") || hasCommandPrefix(message, "!test") {
 			handleTestCommand(v)
 		} else if hasCommandPrefix(message, "/echo") || hasCommandPrefix(message, "!echo") {

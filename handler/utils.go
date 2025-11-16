@@ -42,6 +42,42 @@ func getNotificationTargets() []string {
 	return strings.Split(targets, ",")
 }
 
+// Helper function to get list of group JIDs that should be ignored (no response)
+func getNoResponseGroups() []string {
+	noResponse := os.Getenv("NO_RESPONSE")
+	if noResponse == "" {
+		return []string{}
+	}
+	// Split by semicolon and trim spaces
+	jids := strings.Split(noResponse, ";")
+	result := make([]string, 0, len(jids))
+	for _, jid := range jids {
+		trimmed := strings.TrimSpace(jid)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// Helper function to check if a group JID should be ignored
+func shouldIgnoreGroup(chatJID string) bool {
+	noResponseGroups := getNoResponseGroups()
+	if len(noResponseGroups) == 0 {
+		return false
+	}
+	
+	// Normalize the chat JID for comparison
+	chatJID = strings.TrimSpace(chatJID)
+	
+	for _, ignoredJID := range noResponseGroups {
+		if strings.TrimSpace(ignoredJID) == chatJID {
+			return true
+		}
+	}
+	return false
+}
+
 // Helper function to determine if a target is a group JID or phone number
 func isGroupJID(target string) bool {
 	// WhatsApp group JIDs end with @g.us

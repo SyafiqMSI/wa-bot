@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -31,6 +32,10 @@ Tanya apa saja ke asisten AI pribadi Fiq
 
 *!groups* atau */groups*
 Menampilkan daftar grup yang diikuti bot
+
+*!groups [nama grup]* atau */groups [nama grup]*
+Mencari grup berdasarkan nama dan menampilkan ID-nya
+Contoh: *!groups Braincore Community*
 
 *!ping* atau */ping*
 Cek apakah bot sedang aktif
@@ -204,9 +209,18 @@ func handleEchoCommand(v *events.Message, originalMessage string) {
 }
 
 // Handle groups command from WhatsApp message
-func handleGroupsCommand(v *events.Message) {
+func handleGroupsCommand(v *events.Message, originalMessage string) {
 	if !WaClient.IsConnected() {
 		return
+	}
+
+	// Extract group name after "!groups " or "/groups "
+	var searchName string
+	lower := strings.ToLower(originalMessage)
+	if strings.HasPrefix(lower, "!groups ") {
+		searchName = strings.TrimSpace(originalMessage[8:]) // Remove "!groups "
+	} else if strings.HasPrefix(lower, "/groups ") {
+		searchName = strings.TrimSpace(originalMessage[8:]) // Remove "/groups "
 	}
 
 	// Get all groups
@@ -222,7 +236,55 @@ func handleGroupsCommand(v *events.Message) {
 		return
 	}
 
-	// Format groups list
+	// If search name provided, filter groups
+	if searchName != "" {
+		// Search for groups matching the name (case-insensitive, partial match)
+		var matchedGroups []*types.GroupInfo
+		searchLower := strings.ToLower(searchName)
+
+		for _, group := range groups {
+			groupName := group.Name
+			if groupName == "" {
+				groupName = "Tanpa Nama"
+			}
+
+			// Case-insensitive partial match
+			if strings.Contains(strings.ToLower(groupName), searchLower) {
+				matchedGroups = append(matchedGroups, group)
+			}
+		}
+
+		if len(matchedGroups) == 0 {
+			message := fmt.Sprintf("🔍 *Pencarian Grup*\n\n❌ Tidak ditemukan grup dengan nama \"%s\"\n\n💡 _Coba gunakan kata kunci yang lebih umum atau gunakan `!groups` untuk melihat semua grup_", searchName)
+			sendMessageWithRetry(context.Background(), v.Info.Chat, message, 2)
+			return
+		}
+
+		// Format matched groups
+		message := fmt.Sprintf("🔍 *Hasil Pencarian Grup: \"%s\"*\n\n", searchName)
+		message += fmt.Sprintf("📊 Ditemukan %d grup:\n\n", len(matchedGroups))
+
+		for _, group := range matchedGroups {
+			groupName := group.Name
+			if groupName == "" {
+				groupName = "Tanpa Nama"
+			}
+
+			message += fmt.Sprintf("🏷️ *%s*\n", groupName)
+			message += fmt.Sprintf("🆔 `%s`\n\n", group.JID.String())
+		}
+
+		message += "💡 _Gunakan `!groups [nama grup]` untuk mencari grup lain_"
+
+		// Send response
+		err = sendMessageWithRetry(context.Background(), v.Info.Chat, message, 2)
+		if err != nil {
+			log.Printf("Failed to send groups search result: %v", err)
+		}
+		return
+	}
+
+	// No search name, show all groups
 	message := fmt.Sprintf("📋 *Daftar Grup yang Diikuti* (%d grup)\n\n", len(groups))
 
 	for i, group := range groups {
@@ -240,7 +302,8 @@ func handleGroupsCommand(v *events.Message) {
 		message += fmt.Sprintf("🆔 `%s`\n", group.JID.String())
 	}
 
-	message += "💡 _Gunakan /groups untuk melihat daftar ini lagi_"
+	message += "\n💡 _Gunakan `!groups [nama grup]` untuk mencari grup tertentu_\n"
+	message += "💡 _Contoh: `!groups Braincore Community`_"
 
 	// Send response
 	err = sendMessageWithRetry(context.Background(), v.Info.Chat, message, 2)
