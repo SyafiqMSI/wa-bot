@@ -84,8 +84,8 @@ func NewGeminiClient() *GeminiClient {
 
 	return &GeminiClient{
 		APIKey:       apiKey,
-		BaseURL:      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-		ImageBaseURL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent",
+		BaseURL:      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+		ImageBaseURL: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-image-generation:generateContent",
 		HTTPClient: &http.Client{
 			Timeout: 60 * time.Second, // Increased timeout for image generation
 		},
