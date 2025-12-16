@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+tmp/
+*.exe
+*.exe~
+
+# Session files (will be mounted as volume)
+# session/
+
+# Logs
+*.log
+build-errors.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Air config (not needed in Docker)
+.air.toml
+
+# Environment files (will be passed via docker-compose)
+.env.local
+.env.*.local
+
