@@ -31,6 +31,12 @@ func SetupRoutes() *mux.Router {
 	// GitHub webhook endpoint
 	r.HandleFunc("/github-webhook", handleGitHubWebhook).Methods("POST")
 
+	// Viseron object-detection/motion webhook endpoint
+	r.HandleFunc("/viseron-webhook", handleViseronWebhook).Methods("POST")
+
+	// Viseron debug: inspect recordings API response (GET /viseron-debug?base=...&camera=...)
+	r.HandleFunc("/viseron-debug", handleViseronDebug).Methods("GET")
+
 	// Groups endpoint
 	r.HandleFunc("/groups", handleGetGroups).Methods("GET")
 
@@ -65,6 +71,7 @@ func handleMainStatus(w http.ResponseWriter, r *http.Request) {
 			"/send-bulk-same-message",
 			"/send-bulk-different-messages",
 			"/github-webhook (supports ?jid=<target_jid> parameter)",
+			"/viseron-webhook",
 			"/groups",
 		},
 	})

@@ -20,7 +20,7 @@ FROM alpine:3.20
 
 WORKDIR /root/
 
-RUN apk add --no-cache sqlite-libs libwebp-tools
+RUN apk add --no-cache sqlite-libs libwebp-tools ffmpeg
 
 COPY --from=builder /app/wa-bot .
 
