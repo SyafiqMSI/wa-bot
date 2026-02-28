@@ -14,6 +14,9 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"whatsmeow-api/handler"
+
+	"whatsmeow-api/services/gemini"
+	"whatsmeow-api/whatsapp"
 )
 
 func main() {
@@ -25,16 +28,14 @@ func main() {
 
 	logger := waLog.Stdout("whatsapp", "INFO", true)
 
-	// Initialize memory store
 	memoryPath := os.Getenv("MEMORY_FILE")
 	if memoryPath == "" {
 		memoryPath = "memory.json"
 	}
-	if err := handler.InitMemory(memoryPath); err != nil {
+	if err := gemini.InitMemory(memoryPath); err != nil {
 		log.Printf("Failed to initialize memory store: %v", err)
 	}
 
-	// Ensure session directory exists
 	if err := os.MkdirAll("session", 0755); err != nil {
 		log.Fatalf("Failed to create session directory: %v", err)
 	}
@@ -49,12 +50,12 @@ func main() {
 		log.Fatalf("Failed to get device: %v", err)
 	}
 
-	handler.WaClient = whatsmeow.NewClient(deviceStore, logger)
-	handler.WaClient.AddEventHandler(handler.EventHandler)
+	whatsapp.Client = whatsmeow.NewClient(deviceStore, logger)
+	whatsapp.Client.AddEventHandler(handler.EventHandler)
 
-	if handler.WaClient.Store.ID == nil {
-		qrChan, _ := handler.WaClient.GetQRChannel(ctx)
-		err = handler.WaClient.Connect()
+	if whatsapp.Client.Store.ID == nil {
+		qrChan, _ := whatsapp.Client.GetQRChannel(ctx)
+		err = whatsapp.Client.Connect()
 		if err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
@@ -67,7 +68,7 @@ func main() {
 			}
 		}
 	} else {
-		err = handler.WaClient.Connect()
+		err = whatsapp.Client.Connect()
 		if err != nil {
 			log.Fatalf("Failed to connect: %v", err)
 		}
@@ -81,19 +82,10 @@ func main() {
 		port = "3000"
 	}
 
-	log.Printf("🚀 WhatsApp Bot Server starting...")
-	log.Printf("🌐 Port: %s", port)
-	log.Printf("🔗 WhatsApp Connected: %t", handler.WaClient.IsConnected())
-	log.Printf("📋 Available endpoints:")
-	log.Printf("   GET  / - Status")
-	log.Printf("   GET  /health - Health check")
-	log.Printf("   GET  /groups - Get joined groups")
-	log.Printf("   GET  /idx - Get IDX market data")
-	log.Printf("   POST /send-message - Send message")
-	log.Printf("   POST /send-bulk-same-message - Bulk same message")
-	log.Printf("   POST /send-bulk-different-messages - Bulk different messages")
-	log.Printf("   POST /github-webhook - GitHub webhook (supports ?jid=<target_jid>)")
-	log.Printf("✅ Server is ready and listening on port %s", port)
+	log.Printf("[server] WhatsApp Bot Server starting...")
+	log.Printf("[server] Port: %s", port)
+	log.Printf("[server] WhatsApp Connected: %t", whatsapp.Client.IsConnected())
+	log.Printf("[server] Server is ready and listening on port %s", port)
 
 	log.Fatal(http.ListenAndServe(":"+port, httpHandler))
 }

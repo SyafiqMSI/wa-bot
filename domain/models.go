@@ -1,27 +1,22 @@
-package handler
+package domain
 
 import (
-	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
-// WhatsApp client instance
-var WaClient *whatsmeow.Client
-
-// Message request structures
-type sendRequest struct {
+type SendRequest struct {
 	Secret  string `json:"secret"`
 	Target  string `json:"target"`
 	Message string `json:"message"`
 }
 
-type bulkMessageRequest struct {
+type BulkMessageRequest struct {
 	Secret  string   `json:"secret"`
 	Targets []string `json:"targets"`
 	Message string   `json:"message"`
 }
 
-type bulkDifferentMessageRequest struct {
+type BulkDifferentMessageRequest struct {
 	Secret   string `json:"secret"`
 	Messages []struct {
 		Targets string `json:"targets"`
@@ -29,7 +24,6 @@ type bulkDifferentMessageRequest struct {
 	} `json:"messages"`
 }
 
-// GitHub webhook payload structures
 type GitHubWebhookPayload struct {
 	Action      string       `json:"action,omitempty"`
 	Repository  Repository   `json:"repository"`
@@ -90,5 +84,19 @@ type PullRequest struct {
 	Merged  bool   `json:"merged"`
 }
 
-// Event message type for WhatsApp events
 type MessageEvent = events.Message
+
+type ViseronPayload struct {
+	Camera         string          `json:"camera,omitempty"`
+	CameraName     string          `json:"camera_name,omitempty"`
+	EventType      string          `json:"event_type,omitempty"`
+	TriggerTime    string          `json:"trigger_time,omitempty"`
+	Objects        []ViseronObject `json:"objects,omitempty"`
+	SnapshotURL    string          `json:"snapshot_url,omitempty"`
+	ViseronBaseURL string          `json:"-"`
+}
+
+type ViseronObject struct {
+	Label      string  `json:"label,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+}

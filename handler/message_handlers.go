@@ -7,13 +7,16 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"whatsmeow-api/domain"
+	"whatsmeow-api/utils"
+	"whatsmeow-api/whatsapp"
 )
 
-// Handle send message
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req sendRequest
+	var req domain.SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -31,15 +34,14 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !WaClient.IsConnected() {
+	if !whatsapp.Client.IsConnected() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "WhatsApp client not connected"})
 		return
 	}
 
-	targetJID := createTargetJID(req.Target)
+	targetJID := utils.CreateTargetJID(req.Target)
 
-	// Check if JID creation failed
 	if targetJID.IsEmpty() {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -51,15 +53,15 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	targetType := "individual"
 	displayTarget := req.Target
-	if isGroupJID(req.Target) {
+	if utils.IsGroupJID(req.Target) {
 		targetType = "group"
 	} else {
-		displayTarget = normalizePhoneNumber(req.Target)
+		displayTarget = utils.NormalizePhoneNumber(req.Target)
 	}
 
 	log.Printf("Sending message to %s: %s (original: %s)", targetType, displayTarget, req.Target)
 
-	err := sendMessageWithRetry(context.Background(), targetJID, req.Message, 3)
+	err := utils.SendMessageWithRetry(context.Background(), targetJID, req.Message, 3)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -78,11 +80,10 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Handle bulk send same message
 func handleBulkSendSameMessage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req bulkMessageRequest
+	var req domain.BulkMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -100,7 +101,7 @@ func handleBulkSendSameMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !WaClient.IsConnected() {
+	if !whatsapp.Client.IsConnected() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "WhatsApp client not connected"})
 		return
@@ -109,9 +110,8 @@ func handleBulkSendSameMessage(w http.ResponseWriter, r *http.Request) {
 	results := make([]map[string]interface{}, len(req.Targets))
 
 	for i, target := range req.Targets {
-		targetJID := createTargetJID(target)
+		targetJID := utils.CreateTargetJID(target)
 
-		// Skip if JID creation failed
 		if targetJID.IsEmpty() {
 			results[i] = map[string]interface{}{
 				"original_target": target,
@@ -124,15 +124,15 @@ func handleBulkSendSameMessage(w http.ResponseWriter, r *http.Request) {
 
 		targetType := "individual"
 		displayTarget := target
-		if isGroupJID(target) {
+		if utils.IsGroupJID(target) {
 			targetType = "group"
 		} else {
-			displayTarget = normalizePhoneNumber(target)
+			displayTarget = utils.NormalizePhoneNumber(target)
 		}
 
 		log.Printf("Sending bulk message %d/%d to %s: %s", i+1, len(req.Targets), targetType, displayTarget)
 
-		err := sendMessageWithRetry(context.Background(), targetJID, req.Message, 2)
+		err := utils.SendMessageWithRetry(context.Background(), targetJID, req.Message, 2)
 
 		results[i] = map[string]interface{}{
 			"original_target": target,
@@ -158,11 +158,10 @@ func handleBulkSendSameMessage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Handle bulk send different messages
 func handleBulkSendDifferentMessages(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req bulkDifferentMessageRequest
+	var req domain.BulkDifferentMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -180,7 +179,7 @@ func handleBulkSendDifferentMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !WaClient.IsConnected() {
+	if !whatsapp.Client.IsConnected() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "WhatsApp client not connected"})
 		return
@@ -189,9 +188,8 @@ func handleBulkSendDifferentMessages(w http.ResponseWriter, r *http.Request) {
 	results := make([]map[string]interface{}, len(req.Messages))
 
 	for i, msg := range req.Messages {
-		targetJID := createTargetJID(msg.Targets)
+		targetJID := utils.CreateTargetJID(msg.Targets)
 
-		// Skip if JID creation failed
 		if targetJID.IsEmpty() {
 			results[i] = map[string]interface{}{
 				"original_target": msg.Targets,
@@ -205,15 +203,15 @@ func handleBulkSendDifferentMessages(w http.ResponseWriter, r *http.Request) {
 
 		targetType := "individual"
 		displayTarget := msg.Targets
-		if isGroupJID(msg.Targets) {
+		if utils.IsGroupJID(msg.Targets) {
 			targetType = "group"
 		} else {
-			displayTarget = normalizePhoneNumber(msg.Targets)
+			displayTarget = utils.NormalizePhoneNumber(msg.Targets)
 		}
 
 		log.Printf("Sending different message %d/%d to %s: %s", i+1, len(req.Messages), targetType, displayTarget)
 
-		err := sendMessageWithRetry(context.Background(), targetJID, msg.Message, 2)
+		err := utils.SendMessageWithRetry(context.Background(), targetJID, msg.Message, 2)
 
 		results[i] = map[string]interface{}{
 			"original_target": msg.Targets,

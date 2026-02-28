@@ -9,28 +9,30 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"whatsmeow-api/domain"
+	"whatsmeow-api/utils"
+	"whatsmeow-api/whatsapp"
 )
 
-// Format GitHub event messages
-func formatGitHubMessage(eventType string, payload *GitHubWebhookPayload) string {
+func formatGitHubMessage(eventType string, payload *domain.GitHubWebhookPayload) string {
 	repo := payload.Repository.FullName
 
 	switch eventType {
 	case "push":
 		if len(payload.Commits) == 0 {
-			pusherName := getPusherName(payload)
-			return fmt.Sprintf("🔄 *Push Event*\n📁 *Repository:* %s\n👤 *Pusher:* %s\n🌿 *Branch:* %s\n\n_No commits in this push_",
+			pusherName := utils.GetPusherName(payload)
+			return fmt.Sprintf("[Push Event]\nRepository: %s\nPusher: %s\nBranch: %s\n\n_No commits in this push_",
 				repo, pusherName, strings.TrimPrefix(payload.Ref, "refs/heads/"))
 		}
 
 		commitCount := len(payload.Commits)
 		branch := strings.TrimPrefix(payload.Ref, "refs/heads/")
-		pusherName := getPusherName(payload)
+		pusherName := utils.GetPusherName(payload)
 
-		message := fmt.Sprintf("🔄 *Push Event*\n📁 *Repository:* %s\n👤 *Pusher:* %s\n🌿 *Branch:* %s\n📝 *Commits:* %d\n\n",
+		message := fmt.Sprintf("[Push Event]\nRepository: %s\nPusher: %s\nBranch: %s\nCommits: %d\n\n",
 			repo, pusherName, branch, commitCount)
 
-		// Show up to 3 commits with enhanced details
 		for i, commit := range payload.Commits {
 			if i >= 3 {
 				message += fmt.Sprintf("_... and %d more commits_\n", commitCount-3)
@@ -38,138 +40,124 @@ func formatGitHubMessage(eventType string, payload *GitHubWebhookPayload) string
 			}
 			shortID := commit.ID[:7]
 
-			// Add file changes summary
-			fileChanges := getFileChangesSummary(commit)
+			fileChanges := utils.GetFileChangesSummary(commit)
 
-			// Format commit message (truncate if too long)
 			commitMsg := commit.Message
 			if len(commitMsg) > 80 {
 				commitMsg = commitMsg[:77] + "..."
 			}
 
-			message += fmt.Sprintf("🔹 `%s` %s%s\n", shortID, commitMsg, fileChanges)
+			message += fmt.Sprintf("- `%s` %s%s\n", shortID, commitMsg, fileChanges)
 		}
 
-		// Add repository link
-		message += fmt.Sprintf("\n🔗 *View Repository:* %s", payload.Repository.HTMLURL)
+		message += fmt.Sprintf("\nView Repository: %s", payload.Repository.HTMLURL)
 
 		return message
 
 	case "issues":
 		action := payload.Action
 		issue := payload.Issue
-		actionEmoji := "🐛"
-
+		actionPrefix := "[Issue]"
 		switch action {
 		case "opened":
-			actionEmoji = "🆕"
+			actionPrefix = "[New Issue]"
 		case "closed":
-			actionEmoji = "✅"
+			actionPrefix = "[Closed Issue]"
 		case "reopened":
-			actionEmoji = "🔄"
+			actionPrefix = "[Reopened Issue]"
 		}
 
-		message := fmt.Sprintf("%s *Issue %s*\n📁 *Repository:* %s\n👤 *User:* %s\n📋 *Issue #%d:* %s\n🔗 *Link:* %s",
-			actionEmoji, strings.Title(action), repo, payload.Sender.Login, issue.Number, issue.Title, issue.HTMLURL)
+		message := fmt.Sprintf("%s\nRepository: %s\nUser: %s\nIssue #%d: %s\nLink: %s",
+			actionPrefix, repo, payload.Sender.Login, issue.Number, issue.Title, issue.HTMLURL)
 		return message
 
 	case "pull_request":
 		action := payload.Action
 		pr := payload.PullRequest
-		actionEmoji := "🔀"
-
+		actionPrefix := "[Pull Request]"
 		switch action {
 		case "opened":
-			actionEmoji = "🆕"
+			actionPrefix = "[New PR]"
 		case "closed":
 			if pr.Merged {
-				actionEmoji = "✅"
-				action = "merged"
+				actionPrefix = "[Merged PR]"
 			} else {
-				actionEmoji = "❌"
+				actionPrefix = "[Closed PR]"
 			}
 		case "reopened":
-			actionEmoji = "🔄"
+			actionPrefix = "[Reopened PR]"
 		}
 
-		message := fmt.Sprintf("%s *Pull Request %s*\n📁 *Repository:* %s\n👤 *User:* %s\n📋 *PR #%d:* %s\n🔗 *Link:* %s",
-			actionEmoji, strings.Title(action), repo, payload.Sender.Login, pr.Number, pr.Title, pr.HTMLURL)
+		message := fmt.Sprintf("%s\nRepository: %s\nUser: %s\nPR #%d: %s\nLink: %s",
+			actionPrefix, repo, payload.Sender.Login, pr.Number, pr.Title, pr.HTMLURL)
 		return message
 
 	case "release":
-		message := fmt.Sprintf("🚀 *Release %s*\n📁 *Repository:* %s\n👤 *User:* %s\n🔗 *Link:* %s",
+		message := fmt.Sprintf("[Release %s]\nRepository: %s\nUser: %s\nLink: %s",
 			strings.Title(payload.Action), repo, payload.Sender.Login, payload.Repository.HTMLURL)
 		return message
 
 	default:
-		return fmt.Sprintf("📢 *GitHub Event: %s*\n📁 *Repository:* %s\n👤 *User:* %s\n🔗 *Link:* %s",
+		return fmt.Sprintf("[GitHub Event: %s]\nRepository: %s\nUser: %s\nLink: %s",
 			strings.Title(eventType), repo, payload.Sender.Login, payload.Repository.HTMLURL)
 	}
 }
 
-// Handle GitHub webhook
 func handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	// Add detailed logging for debugging
-	log.Printf("🔔 GitHub webhook received: %s %s", r.Method, r.URL.Path)
-	log.Printf("🔔 Headers: %v", r.Header)
+
+	log.Printf("[github] webhook received: %s %s", r.Method, r.URL.Path)
+	log.Printf("[github] Headers: %v", r.Header)
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("❌ Failed to read request body: %v", err)
+		log.Printf("[github] Failed to read request body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read request body"})
 		return
 	}
 
-	log.Printf("🔔 Request body length: %d bytes", len(body))
+	log.Printf("[github] Request body length: %d bytes", len(body))
 
-	// Skip signature verification since no secret is configured
-	log.Printf("🔔 Webhook signature verification: disabled")
+	log.Printf("[github] Webhook signature verification: disabled")
 
-	// Get event type from header
 	eventType := r.Header.Get("X-GitHub-Event")
 	if eventType == "" {
-		log.Printf("❌ Missing X-GitHub-Event header")
+		log.Printf("[github] Missing X-GitHub-Event header")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Missing X-GitHub-Event header"})
 		return
 	}
 
-	log.Printf("🔔 GitHub event type: %s", eventType)
+	log.Printf("[github] event type: %s", eventType)
 
-	// Parse the webhook payload
-	var payload GitHubWebhookPayload
+	var payload domain.GitHubWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		log.Printf("❌ Failed to parse JSON payload: %v", err)
+		log.Printf("[github] Failed to parse JSON payload: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to parse JSON payload"})
 		return
 	}
 
-	log.Printf("🔔 Repository: %s", payload.Repository.FullName)
+	log.Printf("[github] Repository: %s", payload.Repository.FullName)
 
-	// Check if WhatsApp client is connected
-	if !WaClient.IsConnected() {
+	if !whatsapp.Client.IsConnected() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "WhatsApp client not connected"})
 		return
 	}
 
-	// Get notification targets
 	var targets []string
 
-	// Check if custom JID is provided in query parameter
 	customJID := r.URL.Query().Get("jid")
 	if customJID != "" {
-		// Use custom JID from query parameter
+
 		targets = []string{customJID}
-		log.Printf("🎯 Using custom JID from query parameter: %s", customJID)
+		log.Printf("[github] Using custom JID from query parameter: %s", customJID)
 	} else {
-		// Use default targets from environment
-		targets = getNotificationTargets()
+
+		targets = utils.GetNotificationTargets()
 		if len(targets) == 0 {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{
@@ -178,20 +166,17 @@ func handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		log.Printf("🎯 Using default targets from environment: %d targets", len(targets))
+		log.Printf("[github] Using default targets from environment: %d targets", len(targets))
 	}
 
-	// Format the message based on event type
 	message := formatGitHubMessage(eventType, &payload)
 
-	// Send notifications to all targets
 	results := make([]map[string]interface{}, len(targets))
 	successCount := 0
 
 	for i, target := range targets {
-		targetJID := createTargetJID(target)
+		targetJID := utils.CreateTargetJID(target)
 
-		// Skip if JID creation failed
 		if targetJID.IsEmpty() {
 			results[i] = map[string]interface{}{
 				"target":  target,
@@ -204,15 +189,15 @@ func handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 		targetType := "individual"
 		displayTarget := target
-		if isGroupJID(target) {
+		if utils.IsGroupJID(target) {
 			targetType = "group"
 		} else {
-			displayTarget = normalizePhoneNumber(strings.TrimSpace(target))
+			displayTarget = utils.NormalizePhoneNumber(strings.TrimSpace(target))
 		}
 
 		log.Printf("Sending GitHub notification (%s) to %s: %s", eventType, targetType, displayTarget)
 
-		err := sendMessageWithRetry(context.Background(), targetJID, message, 2)
+		err := utils.SendMessageWithRetry(context.Background(), targetJID, message, 2)
 
 		results[i] = map[string]interface{}{
 			"target":      displayTarget,
@@ -227,7 +212,6 @@ func handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			successCount++
 		}
 
-		// Small delay between messages
 		if i < len(targets)-1 {
 			time.Sleep(500 * time.Millisecond)
 		}

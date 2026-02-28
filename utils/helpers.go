@@ -1,4 +1,4 @@
-package handler
+package utils
 
 import (
 	"bytes"
@@ -19,22 +19,22 @@ import (
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
+
+	"whatsmeow-api/domain"
+	"whatsmeow-api/whatsapp"
 )
 
-// Helper function to check if message starts with command (case insensitive)
-func hasCommandPrefix(message, command string) bool {
+func HasCommandPrefix(message, command string) bool {
 	messageLower := strings.ToLower(message)
 	return strings.HasPrefix(messageLower, strings.ToLower(command))
 }
 
-// Helper function to check if message contains command (case insensitive)
-func containsCommand(message, command string) bool {
+func ContainsCommand(message, command string) bool {
 	messageLower := strings.ToLower(message)
 	return strings.Contains(messageLower, strings.ToLower(command))
 }
 
-// Helper function to get target phone numbers and group JIDs from environment
-func getNotificationTargets() []string {
+func GetNotificationTargets() []string {
 	targets := os.Getenv("NOTIFICATION_TARGETS")
 	if targets == "" {
 		return []string{}
@@ -42,13 +42,12 @@ func getNotificationTargets() []string {
 	return strings.Split(targets, ",")
 }
 
-// Helper function to get list of group JIDs that should be ignored (no response)
-func getNoResponseGroups() []string {
+func GetNoResponseGroups() []string {
 	noResponse := os.Getenv("NO_RESPONSE")
 	if noResponse == "" {
 		return []string{}
 	}
-	// Split by semicolon and trim spaces
+
 	jids := strings.Split(noResponse, ";")
 	result := make([]string, 0, len(jids))
 	for _, jid := range jids {
@@ -60,16 +59,14 @@ func getNoResponseGroups() []string {
 	return result
 }
 
-// Helper function to check if a group JID should be ignored
-func shouldIgnoreGroup(chatJID string) bool {
-	noResponseGroups := getNoResponseGroups()
+func ShouldIgnoreGroup(chatJID string) bool {
+	noResponseGroups := GetNoResponseGroups()
 	if len(noResponseGroups) == 0 {
 		return false
 	}
-	
-	// Normalize the chat JID for comparison
+
 	chatJID = strings.TrimSpace(chatJID)
-	
+
 	for _, ignoredJID := range noResponseGroups {
 		if strings.TrimSpace(ignoredJID) == chatJID {
 			return true
@@ -78,34 +75,31 @@ func shouldIgnoreGroup(chatJID string) bool {
 	return false
 }
 
-// Helper function to determine if a target is a group JID or phone number
-func isGroupJID(target string) bool {
-	// WhatsApp group JIDs end with @g.us
+func IsGroupJID(target string) bool {
+
 	return strings.HasSuffix(target, "@g.us")
 }
 
-// Helper function to create appropriate JID for target
-func createTargetJID(target string) types.JID {
+func CreateTargetJID(target string) types.JID {
 	target = strings.TrimSpace(target)
 
-	if isGroupJID(target) {
-		// It's already a group JID, parse it directly
+	if IsGroupJID(target) {
+
 		jid, err := types.ParseJID(target)
 		if err != nil {
 			log.Printf("Invalid group JID format: %s, error: %v", target, err)
-			// Return empty JID if parsing fails
+
 			return types.JID{}
 		}
 		return jid
 	} else {
-		// It's a phone number, normalize and create individual JID
-		normalizedTarget := normalizePhoneNumber(target)
+
+		normalizedTarget := NormalizePhoneNumber(target)
 		return types.NewJID(normalizedTarget, types.DefaultUserServer)
 	}
 }
 
-// Helper function to get pusher name with fallback
-func getPusherName(payload *GitHubWebhookPayload) string {
+func GetPusherName(payload *domain.GitHubWebhookPayload) string {
 	if payload.Pusher.Name != "" {
 		return payload.Pusher.Name
 	}
@@ -118,8 +112,7 @@ func getPusherName(payload *GitHubWebhookPayload) string {
 	return "Unknown"
 }
 
-// Helper function to get file changes summary
-func getFileChangesSummary(commit Commit) string {
+func GetFileChangesSummary(commit domain.Commit) string {
 	var changes []string
 
 	if len(commit.Added) > 0 {
@@ -139,8 +132,7 @@ func getFileChangesSummary(commit Commit) string {
 	return " (" + strings.Join(changes, ", ") + ")"
 }
 
-// Normalize phone number function
-func normalizePhoneNumber(phone string) string {
+func NormalizePhoneNumber(phone string) string {
 	re := regexp.MustCompile(`\D`)
 	phone = re.ReplaceAllString(phone, "")
 
@@ -163,11 +155,10 @@ func normalizePhoneNumber(phone string) string {
 	return phone
 }
 
-// Send message with retry mechanism
-func sendMessageWithRetry(ctx context.Context, targetJID types.JID, message string, maxRetries int) error {
+func SendMessageWithRetry(ctx context.Context, targetJID types.JID, message string, maxRetries int) error {
 	var err error
 	for i := 0; i < maxRetries; i++ {
-		_, err = WaClient.SendMessage(ctx, targetJID, &waE2E.Message{
+		_, err = whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 			Conversation: proto.String(message),
 		})
 
@@ -185,25 +176,21 @@ func sendMessageWithRetry(ctx context.Context, targetJID types.JID, message stri
 	return err
 }
 
-// Extract human-readable text from various WhatsApp message types
-func getMessageText(msg *waE2E.Message) string {
+func GetMessageText(msg *waE2E.Message) string {
 	if msg == nil {
 		return ""
 	}
 
-	// Plain text
 	if txt := msg.GetConversation(); txt != "" {
 		return txt
 	}
 
-	// Extended text
 	if ext := msg.GetExtendedTextMessage(); ext != nil {
 		if t := ext.GetText(); t != "" {
 			return t
 		}
 	}
 
-	// Media captions
 	if im := msg.GetImageMessage(); im != nil {
 		if cap := im.GetCaption(); cap != "" {
 			return cap
@@ -220,7 +207,6 @@ func getMessageText(msg *waE2E.Message) string {
 		}
 	}
 
-	// Button/list/template responses
 	if br := msg.GetButtonsResponseMessage(); br != nil {
 		if txt := br.GetSelectedDisplayText(); txt != "" {
 			return txt
@@ -231,7 +217,7 @@ func getMessageText(msg *waE2E.Message) string {
 	}
 	if lr := msg.GetListResponseMessage(); lr != nil {
 		if single := lr.GetSingleSelectReply(); single != nil {
-			// Prefer the selected row ID as the command token; display text may be empty
+
 			if id := single.GetSelectedRowID(); id != "" {
 				return id
 			}
@@ -249,7 +235,6 @@ func getMessageText(msg *waE2E.Message) string {
 		}
 	}
 
-	// Interactive responses (newer flows)
 	if ir := msg.GetInteractiveResponseMessage(); ir != nil {
 		if body := ir.GetBody(); body != nil {
 			if t := body.GetText(); t != "" {
@@ -263,22 +248,20 @@ func getMessageText(msg *waE2E.Message) string {
 		}
 	}
 
-	// Wrapped messages
 	if ep := msg.GetEphemeralMessage(); ep != nil {
-		return getMessageText(ep.GetMessage())
+		return GetMessageText(ep.GetMessage())
 	}
 	if dv := msg.GetDeviceSentMessage(); dv != nil {
-		return getMessageText(dv.GetMessage())
+		return GetMessageText(dv.GetMessage())
 	}
 
 	return ""
 }
 
-// Send image message with base64 data
-func sendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 string, caption string, maxRetries int) error {
+func SendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 string, caption string, maxRetries int) error {
 	var err error
 	for i := 0; i < maxRetries; i++ {
-		// Decode base64 image data
+
 		imageData, decodeErr := base64.StdEncoding.DecodeString(imageBase64)
 		if decodeErr != nil {
 			return fmt.Errorf("failed to decode base64 image: %v", decodeErr)
@@ -286,40 +269,35 @@ func sendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 st
 
 		log.Printf("Image data size: %d bytes", len(imageData))
 
-		// Check if image is too large (WhatsApp limit is around 16MB)
 		if len(imageData) > 15*1024*1024 {
 			return fmt.Errorf("image too large: %d bytes (max 15MB)", len(imageData))
 		}
 
-		// Try saving to temporary file first
-		tempFile, tempErr := saveImageToTempFile(imageData)
+		tempFile, tempErr := SaveImageToTempFile(imageData)
 		if tempErr != nil {
 			log.Printf("Failed to save temp file: %v", tempErr)
-			// Continue with direct upload
+
 		} else {
-			defer os.Remove(tempFile) // Clean up temp file
+			defer os.Remove(tempFile)
 			log.Printf("Saved image to temp file: %s", tempFile)
 		}
 
-		// Try to upload and send the image properly
 		log.Printf("Attempting to upload and send image...")
 
-		// Create thumbnail for WhatsApp
 		thumbnailData := imageData
 		if len(imageData) > 100*1024 {
 			log.Printf("Creating thumbnail for large image...")
-			thumb, thumbErr := createThumbnail(imageData)
+			thumb, thumbErr := CreateThumbnail(imageData)
 			if thumbErr == nil {
 				thumbnailData = thumb
 				log.Printf("Thumbnail created: %d bytes", len(thumbnailData))
 			}
 		}
 
-		// Upload the full image using whatsmeow.MediaImage constant
-		uploaded, uploadErr := WaClient.Upload(ctx, imageData, whatsmeow.MediaImage)
+		uploaded, uploadErr := whatsapp.Client.Upload(ctx, imageData, whatsmeow.MediaImage)
 		if uploadErr != nil {
 			log.Printf("Failed to upload image: %v", uploadErr)
-			// Try alternative methods if upload fails
+
 			err = uploadErr
 			if i < maxRetries-1 {
 				time.Sleep(time.Duration(i+1) * time.Second)
@@ -329,7 +307,6 @@ func sendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 st
 
 		log.Printf("Image uploaded successfully")
 
-		// Create image message following official whatsmeow documentation
 		imageMsg := &waE2E.Message{
 			ImageMessage: &waE2E.ImageMessage{
 				Caption:       proto.String(caption),
@@ -344,8 +321,7 @@ func sendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 st
 			},
 		}
 
-		// Send the image message
-		_, err = WaClient.SendMessage(ctx, targetJID, imageMsg)
+		_, err = whatsapp.Client.SendMessage(ctx, targetJID, imageMsg)
 		if err == nil {
 			log.Printf("Image sent successfully to %s", targetJID.String())
 			return nil
@@ -357,35 +333,31 @@ func sendImageWithRetry(ctx context.Context, targetJID types.JID, imageBase64 st
 		}
 	}
 
-	// If all attempts failed, try fallback methods
 	log.Printf("All upload attempts failed, trying alternative methods...")
-	return sendImageFallback(ctx, targetJID, imageBase64, caption)
+	return SendImageFallback(ctx, targetJID, imageBase64, caption)
 }
 
-// Send image using fallback methods when upload fails
-func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 string, caption string) error {
-	// Decode base64 image data
+func SendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 string, caption string) error {
+
 	imageData, decodeErr := base64.StdEncoding.DecodeString(imageBase64)
 	if decodeErr != nil {
 		return fmt.Errorf("failed to decode base64 image: %v", decodeErr)
 	}
 
-	// Try to compress image if it's too large
 	compressedImageData := imageData
 	compressedBase64 := imageBase64
 
-	if len(imageData) > 50*1024 { // If larger than 50KB
+	if len(imageData) > 50*1024 {
 		log.Printf("Image too large (%d bytes), attempting compression...", len(imageData))
-		compressed, compressErr := compressImage(imageData)
+		compressed, compressErr := CompressImage(imageData)
 		if compressErr == nil {
 			compressedImageData = compressed
 			compressedBase64 = base64.StdEncoding.EncodeToString(compressed)
 			log.Printf("Image compressed to %d bytes", len(compressedImageData))
 
-			// If still too large, try more aggressive compression
 			if len(compressedImageData) > 30*1024 {
 				log.Printf("Still too large (%d bytes), trying aggressive compression...", len(compressedImageData))
-				aggressiveCompressed, aggressiveErr := compressImageAggressively(imageData)
+				aggressiveCompressed, aggressiveErr := CompressImageAggressively(imageData)
 				if aggressiveErr == nil {
 					compressedImageData = aggressiveCompressed
 					compressedBase64 = base64.StdEncoding.EncodeToString(aggressiveCompressed)
@@ -399,13 +371,11 @@ func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 		}
 	}
 
-	// Check if data URL is too long for WhatsApp (limit ~4096 chars)
 	dataURL := fmt.Sprintf("data:image/jpeg;base64,%s", compressedBase64)
 	if len(dataURL) > 4000 {
 		log.Printf("Data URL too long (%d chars), trying thumbnail approach", len(dataURL))
 
-		// Try creating a very small thumbnail
-		thumbnailData, thumbnailErr := createThumbnail(compressedImageData)
+		thumbnailData, thumbnailErr := CreateThumbnail(compressedImageData)
 		if thumbnailErr == nil {
 			thumbnailBase64 := base64.StdEncoding.EncodeToString(thumbnailData)
 			thumbnailURL := fmt.Sprintf("data:image/jpeg;base64,%s", thumbnailBase64)
@@ -415,7 +385,7 @@ func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 
 				thumbnailMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n📎 *Thumbnail:*\n%s\n\n*Catatan:* Gambar asli terlalu besar, ini adalah thumbnail kecil.", caption, thumbnailURL)
 
-				_, sendErr := WaClient.SendMessage(ctx, targetJID, &waE2E.Message{
+				_, sendErr := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 					Conversation: proto.String(thumbnailMessage),
 				})
 
@@ -426,11 +396,10 @@ func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 			}
 		}
 
-		// If thumbnail also fails, send fallback message
 		log.Printf("Thumbnail also too large, sending fallback message")
 		fallbackMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n❌ *Gagal Mengirim Gambar*\n\nGambar berhasil dibuat oleh AI tetapi terlalu besar untuk dikirim melalui WhatsApp.\n\n*Detail:*\n• Ukuran file: %d bytes\n• Data URL: %d karakter\n• Batas WhatsApp: ~4000 karakter\n\n*Solusi:*\n• Gunakan deskripsi yang lebih sederhana\n• Coba prompt yang menghasilkan gambar lebih kecil\n• Contoh: `!img simple cat` atau `!img red circle`", caption, len(compressedImageData), len(dataURL))
 
-		_, sendErr := WaClient.SendMessage(ctx, targetJID, &waE2E.Message{
+		_, sendErr := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 			Conversation: proto.String(fallbackMessage),
 		})
 
@@ -439,10 +408,10 @@ func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 			return nil
 		}
 	} else {
-		// Send as text message with data URL
+
 		urlMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n📎 *Data URL:*\n%s\n\n*Catatan:* Upload langsung gagal (error 415), gambar tersedia sebagai data URL di atas.", caption, dataURL)
 
-		_, sendErr := WaClient.SendMessage(ctx, targetJID, &waE2E.Message{
+		_, sendErr := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 			Conversation: proto.String(urlMessage),
 		})
 
@@ -455,16 +424,14 @@ func sendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 	return fmt.Errorf("failed to send image using all fallback methods")
 }
 
-// Save image data to temporary file
-func saveImageToTempFile(imageData []byte) (string, error) {
-	// Create temp file
+func SaveImageToTempFile(imageData []byte) (string, error) {
+
 	tempFile, err := ioutil.TempFile("", "whatsapp_image_*.png")
 	if err != nil {
 		return "", err
 	}
 	defer tempFile.Close()
 
-	// Write image data
 	_, err = tempFile.Write(imageData)
 	if err != nil {
 		os.Remove(tempFile.Name())
@@ -474,18 +441,15 @@ func saveImageToTempFile(imageData []byte) (string, error) {
 	return tempFile.Name(), nil
 }
 
-// Compress image to reduce size
-func compressImage(imageData []byte) ([]byte, error) {
-	// Decode PNG image
+func CompressImage(imageData []byte) ([]byte, error) {
+
 	img, err := png.Decode(bytes.NewReader(imageData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode PNG: %v", err)
 	}
 
-	// Create a buffer to write compressed JPEG
 	var buf bytes.Buffer
 
-	// Encode as JPEG with quality 70 (good balance between size and quality)
 	err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 70})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode JPEG: %v", err)
@@ -494,18 +458,15 @@ func compressImage(imageData []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Aggressively compress image to reduce size further
-func compressImageAggressively(imageData []byte) ([]byte, error) {
-	// Decode PNG image
+func CompressImageAggressively(imageData []byte) ([]byte, error) {
+
 	img, err := png.Decode(bytes.NewReader(imageData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode PNG: %v", err)
 	}
 
-	// Create a buffer to write compressed JPEG
 	var buf bytes.Buffer
 
-	// Encode as JPEG with quality 30 (very aggressive compression)
 	err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 30})
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode JPEG: %v", err)
@@ -514,24 +475,21 @@ func compressImageAggressively(imageData []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Create a small thumbnail for very large images
-func createThumbnail(imageData []byte) ([]byte, error) {
-	// Try to decode as JPEG first (since it's already compressed)
+func CreateThumbnail(imageData []byte) ([]byte, error) {
+
 	img, err := jpeg.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		// If not JPEG, try PNG
+
 		img, err = png.Decode(bytes.NewReader(imageData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode image: %v", err)
 		}
 	}
 
-	// Get original dimensions
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
 
-	// Calculate thumbnail size (max 64x64 for smaller data URL)
 	maxSize := 64
 	var newWidth, newHeight int
 	if width > height {
@@ -542,7 +500,6 @@ func createThumbnail(imageData []byte) ([]byte, error) {
 		newWidth = (width * maxSize) / height
 	}
 
-	// Ensure minimum size
 	if newWidth < 1 {
 		newWidth = 1
 	}
@@ -550,10 +507,8 @@ func createThumbnail(imageData []byte) ([]byte, error) {
 		newHeight = 1
 	}
 
-	// Create thumbnail image
 	thumbnail := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 
-	// Simple nearest neighbor resize
 	for y := 0; y < newHeight; y++ {
 		for x := 0; x < newWidth; x++ {
 			srcX := (x * width) / newWidth
@@ -562,7 +517,6 @@ func createThumbnail(imageData []byte) ([]byte, error) {
 		}
 	}
 
-	// Encode as JPEG with very low quality (10 for minimal size)
 	var buf bytes.Buffer
 	err = jpeg.Encode(&buf, thumbnail, &jpeg.Options{Quality: 10})
 	if err != nil {
@@ -572,15 +526,13 @@ func createThumbnail(imageData []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Send image as URL message when direct upload fails
-func sendImageAsURL(ctx context.Context, targetJID types.JID, imageBase64 string, caption string) error {
-	// Create a data URL for the image
+func SendImageAsURL(ctx context.Context, targetJID types.JID, imageBase64 string, caption string) error {
+
 	dataURL := fmt.Sprintf("data:image/png;base64,%s", imageBase64)
 
-	// Send as text message with data URL
 	urlMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n📎 *Data URL:*\n%s\n\n*Catatan:* Upload langsung gagal, gambar tersedia sebagai data URL di atas.", caption, dataURL)
 
-	_, err := WaClient.SendMessage(ctx, targetJID, &waE2E.Message{
+	_, err := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 		Conversation: proto.String(urlMessage),
 	})
 
@@ -592,8 +544,7 @@ func sendImageAsURL(ctx context.Context, targetJID types.JID, imageBase64 string
 	return nil
 }
 
-// Helper function for min
-func min(a, b int) int {
+func Min(a, b int) int {
 	if a < b {
 		return a
 	}

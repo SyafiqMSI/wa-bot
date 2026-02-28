@@ -11,59 +11,52 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"go.mau.fi/whatsmeow/types/events"
+
+	"whatsmeow-api/services/idx"
+	"whatsmeow-api/utils"
+	"whatsmeow-api/whatsapp"
 )
 
-// Setup routes for the application
 func SetupRoutes() *mux.Router {
 	r := mux.NewRouter()
 
-	// Health check endpoint
 	r.HandleFunc("/health", handleHealthCheck).Methods("GET")
 
-	// Main status endpoint
 	r.HandleFunc("/", handleMainStatus).Methods("GET")
 
-	// Message sending endpoints
 	r.HandleFunc("/send-message", handleSendMessage).Methods("POST")
 	r.HandleFunc("/send-bulk-same-message", handleBulkSendSameMessage).Methods("POST")
 	r.HandleFunc("/send-bulk-different-messages", handleBulkSendDifferentMessages).Methods("POST")
 
-	// GitHub webhook endpoint
 	r.HandleFunc("/github-webhook", handleGitHubWebhook).Methods("POST")
 
-	// Viseron object-detection/motion webhook endpoint
 	r.HandleFunc("/viseron-webhook", handleViseronWebhook).Methods("POST")
 
-	// Viseron debug: inspect recordings API response (GET /viseron-debug?base=...&camera=...)
 	r.HandleFunc("/viseron-debug", handleViseronDebug).Methods("GET")
 
-	// Groups endpoint
 	r.HandleFunc("/groups", handleGetGroups).Methods("GET")
 
-	// IDX market data endpoint
 	r.HandleFunc("/idx", handleIDXData).Methods("GET")
 
 	return r
 }
 
-// Handle health check
 func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().Format(time.RFC3339),
-		"whatsapp":  WaClient.IsConnected(),
+		"whatsapp":  whatsapp.Client.IsConnected(),
 		"version":   "2.0.0",
 	})
 }
 
-// Handle main status endpoint
 func handleMainStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "WhatsApp Bot API is running",
-		"connected": WaClient.IsConnected(),
+		"connected": whatsapp.Client.IsConnected(),
 		"timestamp": time.Now().Format(time.RFC3339),
 		"endpoints": []string{
 			"/health",
@@ -77,24 +70,22 @@ func handleMainStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Handle get groups API endpoint
 func handleGetGroups(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if !WaClient.IsConnected() {
+	if !whatsapp.Client.IsConnected() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "WhatsApp client not connected"})
 		return
 	}
 
-	groups, err := WaClient.GetJoinedGroups(context.Background())
+	groups, err := whatsapp.Client.GetJoinedGroups(context.Background())
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
-	// Format response
 	groupList := make([]map[string]interface{}, len(groups))
 	for i, group := range groups {
 		groupList[i] = map[string]interface{}{
@@ -114,15 +105,14 @@ func handleGetGroups(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Handle IDX market data endpoint
 func handleIDXData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	log.Println("🔍 Fetching IDX market data...")
+	log.Println("[IDX] Fetching IDX market data...")
 
-	data, err := GetIDXMarketData()
+	data, err := idx.GetIDXMarketData()
 	if err != nil {
-		log.Printf("❌ Error fetching IDX data: %v", err)
+		log.Printf("[Error] Error fetching IDX data: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "Failed to fetch IDX data: " + err.Error(),
@@ -130,7 +120,7 @@ func handleIDXData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := FormatIDXResponse(data)
+	response := idx.FormatIDXResponse(data)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -141,74 +131,52 @@ func handleIDXData(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Event handler for WhatsApp events
 func EventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
-		// Optional: Skip messages from self to avoid loops
-		// Uncomment the lines below if you want to prevent bot from responding to its own messages
-		// if v.Info.IsFromMe {
-		// 	return
-		// }
 
-		// Skip if this group is in NO_RESPONSE list
 		if v.Info.IsGroup {
-			if shouldIgnoreGroup(v.Info.Chat.String()) {
-				log.Printf("🚫 Ignoring command from ignored group: %s", v.Info.Chat.String())
+			if utils.ShouldIgnoreGroup(v.Info.Chat.String()) {
+				log.Printf("[Warning] Ignoring command from ignored group: %s", v.Info.Chat.String())
 				return
 			}
 		}
 
-		// Tampilkan informasi pesan yang masuk
-		// if v.Info.IsGroup {
-		// 	log.Printf("📱 GROUP MESSAGE - JID: %s", v.Info.Chat.String())
-		// 	log.Printf("📱 GROUP NAME: %s", v.Info.Chat.User)
-		// 	log.Printf("📱 FROM USER: %s", v.Info.Sender.String())
-		// 	log.Printf("📱 MESSAGE: %s", v.Message.GetConversation())
-		// 	log.Printf("📱 COPY THIS JID: %s", v.Info.Chat.String())
-		// 	log.Println("=" + strings.Repeat("=", 50))
-		// } else {
-		// 	log.Printf("💬 INDIVIDUAL MESSAGE - From: %s", v.Info.Sender.String())
-		// 	log.Printf("💬 MESSAGE: %s", v.Message.GetConversation())
-		// }
-
-		// Handle commands (case insensitive)
-		message := getMessageText(v.Message)
+		message := utils.GetMessageText(v.Message)
 		if strings.TrimSpace(message) == "" {
 			return
 		}
-		if hasCommandPrefix(message, "/help") || hasCommandPrefix(message, "!help") {
+		if utils.HasCommandPrefix(message, "/help") || utils.HasCommandPrefix(message, "!help") {
 			handleHelpCommand(v)
-		} else if hasCommandPrefix(message, "/hallo") || hasCommandPrefix(message, "!hallo") {
+		} else if utils.HasCommandPrefix(message, "/hallo") || utils.HasCommandPrefix(message, "!hallo") {
 			handleHalloCommand(v)
-		} else if hasCommandPrefix(message, "/ping") || hasCommandPrefix(message, "!ping") {
+		} else if utils.HasCommandPrefix(message, "/ping") || utils.HasCommandPrefix(message, "!ping") {
 			handlePingCommand(v)
-		} else if hasCommandPrefix(message, "/status") || hasCommandPrefix(message, "!status") {
+		} else if utils.HasCommandPrefix(message, "/status") || utils.HasCommandPrefix(message, "!status") {
 			handleStatusCommand(v)
-		} else if hasCommandPrefix(message, "/info") || hasCommandPrefix(message, "!info") {
+		} else if utils.HasCommandPrefix(message, "/info") || utils.HasCommandPrefix(message, "!info") {
 			handleInfoCommand(v)
-		} else if hasCommandPrefix(message, "/groups") || hasCommandPrefix(message, "!groups") {
+		} else if utils.HasCommandPrefix(message, "/groups") || utils.HasCommandPrefix(message, "!groups") {
 			handleGroupsCommand(v, message)
-		} else if hasCommandPrefix(message, "/test") || hasCommandPrefix(message, "!test") {
+		} else if utils.HasCommandPrefix(message, "/test") || utils.HasCommandPrefix(message, "!test") {
 			handleTestCommand(v)
-		} else if hasCommandPrefix(message, "/echo") || hasCommandPrefix(message, "!echo") {
+		} else if utils.HasCommandPrefix(message, "/echo") || utils.HasCommandPrefix(message, "!echo") {
 			handleEchoCommand(v, message)
-		} else if hasCommandPrefix(message, "/fiq") || hasCommandPrefix(message, "!fiq") {
+		} else if utils.HasCommandPrefix(message, "/fiq") || utils.HasCommandPrefix(message, "!fiq") {
 			handleFiqCommand(v, message)
-		} else if hasCommandPrefix(message, "/apik") || hasCommandPrefix(message, "!apik") {
+		} else if utils.HasCommandPrefix(message, "/apik") || utils.HasCommandPrefix(message, "!apik") {
 			handleApikCommand(v, message)
-		} else if hasCommandPrefix(message, "/idx") || hasCommandPrefix(message, "!idx") {
+		} else if utils.HasCommandPrefix(message, "/idx") || utils.HasCommandPrefix(message, "!idx") {
 			handleIDXCommand(v)
-		} else if hasCommandPrefix(message, "/img") || hasCommandPrefix(message, "!img") {
+		} else if utils.HasCommandPrefix(message, "/img") || utils.HasCommandPrefix(message, "!img") {
 			handleImgCommand(v, message)
 		}
 	default:
-		// Untuk event lain, tampilkan seperti biasa
+
 		log.Printf("Event type: %T", evt)
 	}
 }
 
-// Setup CORS middleware
 func SetupCORS(r *mux.Router) http.Handler {
 	handler := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},

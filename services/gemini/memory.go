@@ -1,4 +1,4 @@
-package handler
+package gemini
 
 import (
 	"encoding/json"
@@ -8,14 +8,12 @@ import (
 	"time"
 )
 
-// MemoryMessage represents a single turn in a conversation
 type MemoryMessage struct {
 	Role      string `json:"role"`
 	Text      string `json:"text"`
 	Timestamp int64  `json:"timestamp"`
 }
 
-// MemoryStore persists chat histories per chat JID and assistant name
 type MemoryStore struct {
 	mu         sync.RWMutex
 	FilePath   string
@@ -23,16 +21,13 @@ type MemoryStore struct {
 	MaxPerChat int
 }
 
-// MemStore is the global memory store instance
 var MemStore *MemoryStore
 
-// InitMemory initializes the global memory store from a JSON file
 func InitMemory(filePath string) error {
 	if filePath == "" {
 		filePath = "memory.json"
 	}
 
-	// Ensure directory exists
 	dir := filepath.Dir(filePath)
 	if dir != "." && dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
@@ -44,7 +39,6 @@ func InitMemory(filePath string) error {
 		MaxPerChat: 50,
 	}
 
-	// Load existing if present
 	if _, err := os.Stat(filePath); err == nil {
 		b, err := os.ReadFile(filePath)
 		if err == nil && len(b) > 0 {
@@ -60,7 +54,6 @@ func (s *MemoryStore) key(chatJID, assistantName string) string {
 	return chatJID + "|" + assistantName
 }
 
-// GetHistory returns up to limit most recent messages
 func (s *MemoryStore) GetHistory(chatJID, assistantName string, limit int) []MemoryMessage {
 	if s == nil {
 		return nil
@@ -76,7 +69,6 @@ func (s *MemoryStore) GetHistory(chatJID, assistantName string, limit int) []Mem
 	return append([]MemoryMessage(nil), h[len(h)-limit:]...)
 }
 
-// Append adds a message and trims per-chat history
 func (s *MemoryStore) Append(chatJID, assistantName, role, text string) {
 	if s == nil {
 		return
@@ -93,7 +85,6 @@ func (s *MemoryStore) Append(chatJID, assistantName, role, text string) {
 	}
 }
 
-// Save writes the memory store to disk
 func (s *MemoryStore) Save() error {
 	if s == nil {
 		return nil
@@ -108,7 +99,6 @@ func (s *MemoryStore) Save() error {
 	return os.WriteFile(s.FilePath, b, 0o644)
 }
 
-// AppendAndSave is a convenience method to append and persist
 func (s *MemoryStore) AppendAndSave(chatJID, assistantName, role, text string) {
 	s.Append(chatJID, assistantName, role, text)
 	_ = s.Save()
