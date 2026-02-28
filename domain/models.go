@@ -100,3 +100,20 @@ type ViseronObject struct {
 	Label      string  `json:"label,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
 }
+
+type IDXData struct {
+	Date     string
+	RUPS     []string
+	UMA      []string
+	Suspensi []string
+	Dividend []DividendData
+}
+
+type DividendData struct {
+	Code    string
+	Amount  string
+	Yield   string
+	Price   string
+	CumDate string
+	ExDate  string
+}

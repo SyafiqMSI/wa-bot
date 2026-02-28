@@ -116,13 +116,13 @@ func GetFileChangesSummary(commit domain.Commit) string {
 	var changes []string
 
 	if len(commit.Added) > 0 {
-		changes = append(changes, fmt.Sprintf("➕ %d added", len(commit.Added)))
+		changes = append(changes, fmt.Sprintf("[+] %d added", len(commit.Added)))
 	}
 	if len(commit.Modified) > 0 {
-		changes = append(changes, fmt.Sprintf("📝 %d modified", len(commit.Modified)))
+		changes = append(changes, fmt.Sprintf("[~] %d modified", len(commit.Modified)))
 	}
 	if len(commit.Removed) > 0 {
-		changes = append(changes, fmt.Sprintf("➖ %d removed", len(commit.Removed)))
+		changes = append(changes, fmt.Sprintf("[-] %d removed", len(commit.Removed)))
 	}
 
 	if len(changes) == 0 {
@@ -383,7 +383,7 @@ func SendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 			if len(thumbnailURL) <= 4000 {
 				log.Printf("Thumbnail created (%d bytes, %d chars), sending thumbnail", len(thumbnailData), len(thumbnailURL))
 
-				thumbnailMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n📎 *Thumbnail:*\n%s\n\n*Catatan:* Gambar asli terlalu besar, ini adalah thumbnail kecil.", caption, thumbnailURL)
+				thumbnailMessage := fmt.Sprintf("[Gambar AI Generated]\n\n%s\n\n[Thumbnail:]\n%s\n\n*Catatan:* Gambar asli terlalu besar, ini adalah thumbnail kecil.", caption, thumbnailURL)
 
 				_, sendErr := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 					Conversation: proto.String(thumbnailMessage),
@@ -397,7 +397,7 @@ func SendImageFallback(ctx context.Context, targetJID types.JID, imageBase64 str
 		}
 
 		log.Printf("Thumbnail also too large, sending fallback message")
-		fallbackMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n❌ *Gagal Mengirim Gambar*\n\nGambar berhasil dibuat oleh AI tetapi terlalu besar untuk dikirim melalui WhatsApp.\n\n*Detail:*\n• Ukuran file: %d bytes\n• Data URL: %d karakter\n• Batas WhatsApp: ~4000 karakter\n\n*Solusi:*\n• Gunakan deskripsi yang lebih sederhana\n• Coba prompt yang menghasilkan gambar lebih kecil\n• Contoh: `!img simple cat` atau `!img red circle`", caption, len(compressedImageData), len(dataURL))
+		fallbackMessage := fmt.Sprintf("[Gambar AI Generated]\n\n%s\n\n[Gagal Mengirim Gambar]\n\nGambar berhasil dibuat oleh AI tetapi terlalu besar untuk dikirim melalui WhatsApp.\n\n*Detail:*\n- Ukuran file: %d bytes\n- Data URL: %d karakter\n- Batas WhatsApp: ~4000 karakter\n\n*Solusi:*\n- Gunakan deskripsi yang lebih sederhana\n- Coba prompt yang menghasilkan gambar lebih kecil\n- Contoh: `!img simple cat` atau `!img red circle`", caption, len(compressedImageData), len(dataURL))
 
 		_, sendErr := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 			Conversation: proto.String(fallbackMessage),
@@ -530,7 +530,7 @@ func SendImageAsURL(ctx context.Context, targetJID types.JID, imageBase64 string
 
 	dataURL := fmt.Sprintf("data:image/png;base64,%s", imageBase64)
 
-	urlMessage := fmt.Sprintf("🎨 *Gambar AI Generated*\n\n%s\n\n📎 *Data URL:*\n%s\n\n*Catatan:* Upload langsung gagal, gambar tersedia sebagai data URL di atas.", caption, dataURL)
+	urlMessage := fmt.Sprintf("[Gambar AI Generated]\n\n%s\n\n[Data URL:]\n%s\n\n*Catatan:* Upload langsung gagal, gambar tersedia sebagai data URL di atas.", caption, dataURL)
 
 	_, err := whatsapp.Client.SendMessage(ctx, targetJID, &waE2E.Message{
 		Conversation: proto.String(urlMessage),

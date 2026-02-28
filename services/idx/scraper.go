@@ -11,37 +11,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PuerkitoBio/goquery"
+	"whatsmeow-api/domain"
 
-	
+	"github.com/PuerkitoBio/goquery"
 )
 
-type IDXData struct {
-	Date     string
-	RUPS     []string
-	UMA      []string
-	Suspensi []string
-	Dividend []DividendData
-}
-
-type DividendData struct {
-	Code    string
-	Amount  string
-	Yield   string
-	Price   string
-	CumDate string
-	ExDate  string
-}
-
-func GetIDXMarketData() (*IDXData, error) {
+func GetIDXMarketData() (*domain.IDXData, error) {
 	today := time.Now().Format("02-Jan-2006")
 
-	data := &IDXData{
+	data := &domain.IDXData{
 		Date:     today,
 		RUPS:     []string{},
 		UMA:      []string{},
 		Suspensi: []string{},
-		Dividend: []DividendData{},
+		Dividend: []domain.DividendData{},
 	}
 
 	client := &http.Client{
@@ -503,7 +486,7 @@ func extractStockCodeFromDescriptionImproved(description string) string {
 	return strings.TrimSpace(description)
 }
 
-func scrapeDividendDataImproved(client *http.Client) ([]DividendData, error) {
+func scrapeDividendDataImproved(client *http.Client) ([]domain.DividendData, error) {
 
 	client.Timeout = 60 * time.Second
 
@@ -528,10 +511,10 @@ func scrapeDividendDataImproved(client *http.Client) ([]DividendData, error) {
 	}
 
 	log.Printf("No dividend data found from any URL")
-	return []DividendData{}, nil
+	return []domain.DividendData{}, nil
 }
 
-func scrapeDividendFromURL(client *http.Client, url string) ([]DividendData, error) {
+func scrapeDividendFromURL(client *http.Client, url string) ([]domain.DividendData, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -597,7 +580,7 @@ func scrapeDividendFromURL(client *http.Client, url string) ([]DividendData, err
 
 	}
 
-	var dividendData []DividendData
+	var dividendData []domain.DividendData
 
 	tableCount := doc.Find("table").Length()
 	log.Printf("Found %d tables on dividend page", tableCount)
@@ -633,7 +616,7 @@ func scrapeDividendFromURL(client *http.Client, url string) ([]DividendData, err
 						i, stockCode, amount, cumDate, exDate)
 
 					if stockCode != "" && amount != "" && stockCode != "Deviden Saham" {
-						dividend := DividendData{
+						dividend := domain.DividendData{
 							Code:    stockCode,
 							Amount:  amount,
 							Yield:   "N/A",
@@ -674,7 +657,7 @@ func scrapeDividendFromURL(client *http.Client, url string) ([]DividendData, err
 					amount != "" && amount != "Amount" {
 
 					if matched, _ := regexp.MatchString(`^[\d.,]+$`, amount); matched {
-						dividend := DividendData{
+						dividend := domain.DividendData{
 							Code:    strings.ToUpper(stockCode),
 							Amount:  amount,
 							Yield:   "N/A",
@@ -701,7 +684,7 @@ func scrapeDividendFromURL(client *http.Client, url string) ([]DividendData, err
 				log.Printf("Data-header parse Row %d: Code='%s', Amount='%s'", i, stockCode, amount)
 
 				if stockCode != "" && amount != "" {
-					dividend := DividendData{
+					dividend := domain.DividendData{
 						Code:    strings.ToUpper(stockCode),
 						Amount:  amount,
 						Yield:   "N/A",
@@ -774,7 +757,7 @@ func extractDividendInfoImproved(description string) (string, string) {
 	return companyName, dividendAmount
 }
 
-func FormatIDXResponse(data *IDXData) string {
+func FormatIDXResponse(data *domain.IDXData) string {
 	var response strings.Builder
 
 	response.WriteString("[IDX Market Data for " + data.Date + "]\n\n")
