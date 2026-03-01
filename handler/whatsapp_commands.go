@@ -118,6 +118,11 @@ func handleStatusCommand(v *events.Message) {
 		return
 	}
 
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*3600)
+	}
+
 	statusMessage := fmt.Sprintf(`[Status Bot]
 
 Koneksi WhatsApp: Terhubung
@@ -125,9 +130,9 @@ Bot Status: Aktif
 Waktu: %s
 Uptime: Bot sedang berjalan
 
-Semua sistem berfungsi dengan baik!`, time.Now().Format("02 Jan 2006, 15:04:05 WIB"))
+Semua sistem berfungsi dengan baik!`, time.Now().In(loc).Format("02 Jan 2006, 15:04:05 WIB"))
 
-	err := utils.SendMessageWithRetry(context.Background(), v.Info.Chat, statusMessage, 2)
+	err = utils.SendMessageWithRetry(context.Background(), v.Info.Chat, statusMessage, 2)
 	if err != nil {
 		log.Printf("Failed to send status message: %v", err)
 	}
@@ -594,8 +599,13 @@ func handleCCTVCommand(v *events.Message, originalMessage string) {
 		return
 	}
 
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*3600)
+	}
+
 	imgBase64 := base64.StdEncoding.EncodeToString(imgData)
-	caption := fmt.Sprintf("[CCTV Manual Snapshot]\n\nKamera: %s\nWaktu: %s", camera, time.Now().Format("02 Jan 2006, 15:04:05 WIB"))
+	caption := fmt.Sprintf("[CCTV Manual Snapshot]\n\nKamera: %s\nWaktu: %s", camera, time.Now().In(loc).Format("02 Jan 2006, 15:04:05 WIB"))
 
 	err = utils.SendImageWithRetry(context.Background(), v.Info.Chat, imgBase64, caption, 3)
 	if err != nil {
