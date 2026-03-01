@@ -2,8 +2,10 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -382,19 +384,78 @@ func handleApikCommand(v *events.Message, originalMessage string) {
 	}
 }
 
-func handleIDXCommand(v *events.Message) {
+func handleIDXCommand(v *events.Message, originalMessage string) {
 	if !whatsapp.Client.IsConnected() {
 		return
 	}
 
-	log.Printf("📊 IDX command received from %s", v.Info.Sender.String())
+	log.Printf("IDX command received from %s: %s", v.Info.Sender.String(), originalMessage)
 
-	loadingMessage := "[IDX] Mengambil data pasar IDX...\n\nSilakan tunggu sebentar..."
+	var targetDate time.Time
+	var dateStr string
+
+	lower := strings.ToLower(originalMessage)
+	if strings.HasPrefix(lower, "!idx ") {
+		dateStr = strings.TrimSpace(originalMessage[5:])
+	} else if strings.HasPrefix(lower, "/idx ") {
+		dateStr = strings.TrimSpace(originalMessage[5:])
+	}
+
+	if dateStr != "" {
+		loc, _ := time.LoadLocation("Asia/Jakarta")
+
+		monthMap := map[string]string{
+			"januari": "January", "jan": "Jan", "februari": "February", "feb": "Feb",
+			"maret": "March", "mar": "Mar", "april": "April", "apr": "Apr",
+			"mei": "May", "may": "May", "juni": "June", "jun": "Jun",
+			"juli": "July", "jul": "Jul", "agustus": "August", "aug": "Aug",
+			"september": "September", "sep": "Sep", "oktober": "October", "oct": "Oct",
+			"november": "November", "nov": "Nov", "desember": "December", "dec": "Dec",
+		}
+
+		dStr := strings.ToLower(dateStr)
+		for indo, eng := range monthMap {
+			if strings.Contains(dStr, indo) {
+				dStr = strings.ReplaceAll(dStr, indo, eng)
+			}
+		}
+
+		formats := []string{
+			"2 January 2006", "02 January 2006", "2 Jan 2006", "02 Jan 2006",
+			"2 January", "02 January", "2 Jan", "02 Jan",
+			"02/01/2006", "02-01-2006", "2006-01-02",
+		}
+
+		parsed := false
+		for _, f := range formats {
+			if t, err := time.Parse(f, dStr); err == nil {
+				if t.Year() == 0 {
+					now := time.Now().In(loc)
+					t = time.Date(now.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+				} else {
+					t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
+				}
+				targetDate = t
+				parsed = true
+				break
+			}
+		}
+
+		if !parsed {
+			utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[Error] Format tanggal tidak dikenali. Contoh: !idx 27 februari 2026", 2)
+			return
+		}
+	} else {
+		targetDate = time.Now()
+	}
+
+	dateFmt := targetDate.Format("02 Jan 2006")
+	loadingMessage := fmt.Sprintf("[IDX] Mengambil data pasar IDX untuk tanggal %s...\n\nSilakan tunggu sebentar...", dateFmt)
 	if err := utils.SendMessageWithRetry(context.Background(), v.Info.Chat, loadingMessage, 2); err != nil {
 		log.Printf("Failed to send loading message: %v", err)
 	}
 
-	data, err := idx.GetIDXMarketData()
+	data, err := idx.GetIDXMarketData(targetDate)
 	if err != nil {
 		errorMessage := "[Error] Gagal mengambil data pasar IDX. Silakan coba lagi nanti."
 		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, errorMessage, 2)
@@ -462,4 +523,116 @@ func handleImgCommand(v *events.Message, originalMessage string) {
 	}
 
 	log.Printf("Successfully generated and sent image for prompt: %s", prompt)
+}
+
+func handleCCTVCommand(v *events.Message, originalMessage string) {
+	if !whatsapp.Client.IsConnected() {
+		return
+	}
+
+	ownerJidStr := os.Getenv("OWNER_JID")
+	if ownerJidStr == "" {
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[Error] OWNER_JID belum dikonfigurasi pada server.", 2)
+		return
+	}
+
+	senderJID := v.Info.Sender.ToNonAD()
+	isOwner := false
+
+	owners := strings.Split(ownerJidStr, ",")
+	for _, ownerCandidate := range owners {
+		ownerCandidate = strings.TrimSpace(ownerCandidate)
+		if ownerCandidate == "" {
+			continue
+		}
+
+		candidateJid := utils.CreateTargetJID(ownerCandidate)
+
+		// Match against several variations of the sender's identifier
+		// 1. Raw sender user ID (e.g. 628123456789)
+		// 2. The full sender JID string without device ID
+		// 3. The raw sender string
+		// 4. Specifically match if the owner configuration was provided as a LID (e.g. 202219995570386@lid)
+		if senderJID.User == candidateJid.User ||
+			senderJID.String() == candidateJid.String() ||
+			senderJID.String() == ownerCandidate ||
+			v.Info.Sender.User == candidateJid.User ||
+			strings.Contains(v.Info.Sender.String(), ownerCandidate) {
+			isOwner = true
+			break
+		}
+	}
+
+	// Check if sender is the owner
+	if !isOwner {
+		log.Printf("[CCTV] Unauthorized access attempt by: %s (Base: %s, User: %s)", v.Info.Sender.String(), senderJID.String(), senderJID.User)
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[Error] Anda tidak memiliki izin untuk menggunakan perintah ini.", 2)
+		return
+	}
+
+	baseURL := os.Getenv("VISERON_BASE_URL")
+	camera := os.Getenv("VISERON_DEFAULT_CAMERA")
+
+	if baseURL == "" || camera == "" {
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[Error] Konfigurasi Viseron (VISERON_BASE_URL, VISERON_DEFAULT_CAMERA) belum lengkap.", 2)
+		return
+	}
+
+	utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[CCTV] Sedang mengambil gambar dari kamera...", 2)
+
+	// Build the API endpoint to get the latest snapshot
+	// Viseron typically provides a latest snapshot endpoint such as /api/v1/camera/camera_1/snapshot
+	snapshotURL := fmt.Sprintf("%s/api/v1/camera/%s/snapshot", baseURL, camera)
+
+	imgData, err := fetchBytes(snapshotURL, 15*time.Second)
+	if err != nil {
+		log.Printf("[CCTV] Failed to fetch manual snapshot: %v", err)
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, fmt.Sprintf("[Error] Gagal mengambil gambar dari CCTV: %v", err), 2)
+		return
+	}
+
+	imgBase64 := base64.StdEncoding.EncodeToString(imgData)
+	caption := fmt.Sprintf("[CCTV Manual Snapshot]\n\nKamera: %s\nWaktu: %s", camera, time.Now().Format("02 Jan 2006, 15:04:05 WIB"))
+
+	err = utils.SendImageWithRetry(context.Background(), v.Info.Chat, imgBase64, caption, 3)
+	if err != nil {
+		log.Printf("Failed to send manual CCTV snapshot: %v", err)
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[Error] Gagal mengirim gambar CCTV ke WhatsApp.", 2)
+	}
+
+	// We can optionally trigger a video clip capture
+	// We run it as a goroutine because it takes 30s to record
+	go func() {
+		utils.SendMessageWithRetry(context.Background(), v.Info.Chat, "[CCTV] Sedang merekam video klip (30 detik)...", 2)
+		sendHLSClipToTargets([]string{v.Info.Chat.String()}, baseURL, camera, "Manual Request Video", time.Now())
+	}()
+}
+
+func handleJIDCommand(v *events.Message, originalMessage string) {
+	if !whatsapp.Client.IsConnected() {
+		return
+	}
+
+	var target string
+	lower := strings.ToLower(originalMessage)
+	if strings.HasPrefix(lower, "!jid ") {
+		target = strings.TrimSpace(originalMessage[5:])
+	} else if strings.HasPrefix(lower, "/jid ") {
+		target = strings.TrimSpace(originalMessage[5:])
+	}
+
+	var response string
+	if target == "" {
+		// Output sender's own JID and the chat's JID
+		response = fmt.Sprintf("[Info JID]\n\nJID Anda: %s\nJID Chat ini: %s", v.Info.Sender.ToNonAD().String(), v.Info.Chat.String())
+	} else {
+		// Generate JID from the target using the existing utility
+		jid := utils.CreateTargetJID(target)
+		response = fmt.Sprintf("[Info JID]\n\nInput: %s\nJID Format: %s", target, jid.String())
+	}
+
+	err := utils.SendMessageWithRetry(context.Background(), v.Info.Chat, response, 2)
+	if err != nil {
+		log.Printf("Failed to send JID info: %v", err)
+	}
 }

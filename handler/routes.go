@@ -108,9 +108,9 @@ func handleGetGroups(w http.ResponseWriter, r *http.Request) {
 func handleIDXData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	log.Println("[IDX] Fetching IDX market data...")
+	log.Println("[IDX] Fetching IDX market data for today...")
 
-	data, err := idx.GetIDXMarketData()
+	data, err := idx.GetIDXMarketData(time.Time{})
 	if err != nil {
 		log.Printf("[Error] Error fetching IDX data: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -167,9 +167,13 @@ func EventHandler(evt interface{}) {
 		} else if utils.HasCommandPrefix(message, "/apik") || utils.HasCommandPrefix(message, "!apik") {
 			handleApikCommand(v, message)
 		} else if utils.HasCommandPrefix(message, "/idx") || utils.HasCommandPrefix(message, "!idx") {
-			handleIDXCommand(v)
+			handleIDXCommand(v, message)
 		} else if utils.HasCommandPrefix(message, "/img") || utils.HasCommandPrefix(message, "!img") {
 			handleImgCommand(v, message)
+		} else if utils.HasCommandPrefix(message, "/cctv") || utils.HasCommandPrefix(message, "!cctv") {
+			handleCCTVCommand(v, message)
+		} else if utils.HasCommandPrefix(message, "/jid") || utils.HasCommandPrefix(message, "!jid") {
+			handleJIDCommand(v, message)
 		}
 	default:
 

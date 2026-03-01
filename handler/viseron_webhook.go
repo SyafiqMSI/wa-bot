@@ -94,10 +94,38 @@ func deriveBaseURL(rawURL string) string {
 }
 
 func formatViseronCaption(payload *domain.ViseronPayload) string {
-	now := time.Now().Format("02 Jan 2006, 15:04:05")
-	if payload.TriggerTime != "" {
-		now = payload.TriggerTime
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*3600)
 	}
+
+	now := time.Now().In(loc)
+	if payload.TriggerTime != "" {
+		formats := []string{
+			time.RFC3339,
+			time.RFC3339Nano,
+			"2006-01-02 15:04:05",
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05.999999999",
+		}
+		parsed := false
+		for _, f := range formats {
+			if t, err := time.Parse(f, payload.TriggerTime); err == nil {
+				now = t.In(loc)
+				parsed = true
+				break
+			}
+		}
+		if !parsed {
+			if f, err := strconv.ParseFloat(payload.TriggerTime, 64); err == nil {
+				sec := int64(f)
+				nsec := int64((f - float64(sec)) * 1e9)
+				now = time.Unix(sec, nsec).In(loc)
+			}
+		}
+	}
+	timeStr := now.Format("02 Jan 2006, 15:04:05")
+
 	cameraID := payload.Camera
 	if payload.CameraName != "" {
 		cameraID = payload.CameraName
@@ -111,7 +139,7 @@ func formatViseronCaption(payload *domain.ViseronPayload) string {
 		return strings.Join([]string{
 			"*[Viseron] Gerakan Terdeteksi*",
 			fmt.Sprintf("Kamera : %s", cameraID),
-			fmt.Sprintf("Waktu  : %s", now),
+			fmt.Sprintf("Waktu  : %s", timeStr),
 			"",
 			"Terdeteksi adanya pergerakan di area kamera.",
 		}, "\n")
@@ -119,7 +147,7 @@ func formatViseronCaption(payload *domain.ViseronPayload) string {
 		lines := []string{
 			"*[Viseron] Objek Terdeteksi*",
 			fmt.Sprintf("Kamera : %s", cameraID),
-			fmt.Sprintf("Waktu  : %s", now),
+			fmt.Sprintf("Waktu  : %s", timeStr),
 		}
 		if len(payload.Objects) > 0 {
 			lines = append(lines, "Objek  :")

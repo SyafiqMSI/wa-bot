@@ -102,11 +102,12 @@ type ViseronObject struct {
 }
 
 type IDXData struct {
-	Date     string
-	RUPS     []string
-	UMA      []string
-	Suspensi []string
-	Dividend []DividendData
+	Date       string
+	RUPS       []string
+	UMA        []string
+	Suspensi   []string
+	Unsuspensi []string
+	Dividend   []DividendData
 }
 
 type DividendData struct {

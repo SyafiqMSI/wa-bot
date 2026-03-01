@@ -2,6 +2,8 @@ package idx
 
 import (
 	"compress/gzip"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -14,903 +16,375 @@ import (
 	"whatsmeow-api/domain"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 )
 
-func GetIDXMarketData() (*domain.IDXData, error) {
-	today := time.Now().Format("02-Jan-2006")
+// idxNuxtItem is a single announcement row from IDX __NUXT__ state
+type idxNuxtItem struct {
+	Text string `json:"text"`
+	Date string `json:"date"`
+}
+
+// GetIDXMarketData is the main entry point to fetch all market data for a target date
+func GetIDXMarketData(targetDate time.Time) (*domain.IDXData, error) {
+	if targetDate.IsZero() {
+		targetDate = time.Now()
+	}
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*3600)
+	}
+	targetDate = targetDate.In(loc)
+	todayStr := targetDate.Format("02-Jan-2006")
 
 	data := &domain.IDXData{
-		Date:     today,
-		RUPS:     []string{},
-		UMA:      []string{},
-		Suspensi: []string{},
-		Dividend: []domain.DividendData{},
+		Date:       todayStr,
+		RUPS:       []string{},
+		UMA:        []string{},
+		Suspensi:   []string{},
+		Unsuspensi: []string{},
+		Dividend:   []domain.DividendData{},
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	client := &http.Client{Timeout: 30 * time.Second}
 
-	uma, err := scrapeUMADataImproved(client)
-	if err != nil {
-		log.Printf("Error fetching UMA data: %v", err)
-	} else {
+	// Fetch everything in sequence
+	if uma, err := scrapeUMAData(targetDate); err == nil {
 		data.UMA = uma
 	}
-
-	suspensi, err := scrapeSuspensiDataImproved(client)
-	if err != nil {
-		log.Printf("Error fetching Suspensi data: %v", err)
-	} else {
-		data.Suspensi = suspensi
+	if susp, unsusp, err := scrapeSuspensiData(targetDate); err == nil {
+		data.Suspensi = susp
+		data.Unsuspensi = unsusp
 	}
-
-	rups, err := scrapeRUPSDataImproved(client)
-	if err != nil {
-		log.Printf("Error fetching RUPS data: %v", err)
-	} else {
+	if rups, err := scrapeRUPSData(client, targetDate); err == nil {
 		data.RUPS = rups
 	}
-
-	dividend, err := scrapeDividendDataImproved(client)
-	if err != nil {
-		log.Printf("Error fetching Dividend data: %v", err)
-	} else {
+	if dividend, err := scrapeDividendData(client, targetDate); err == nil {
 		data.Dividend = dividend
 	}
 
 	return data, nil
 }
 
-func isDateTodayImproved(dateStr string) bool {
-	if dateStr == "" {
-		return false
+// --- Scraper Implementations ---
+
+func scrapeUMAData(targetDate time.Time) ([]string, error) {
+	items, err := scrapeIDXWithChromedp("https://www.idx.co.id/id/berita/unusual-market-activity-uma", "", "")
+	if err != nil {
+		return nil, err
 	}
 
-	today := time.Now()
-	todayStr := today.Format("2006-01-02")
-
-	monthMap := map[string]string{
-		"januari": "january", "jan": "jan",
-		"februari": "february", "feb": "feb",
-		"maret": "march", "mar": "mar",
-		"april": "april", "apr": "apr",
-		"mei": "may", "may": "may",
-		"juni": "june", "jun": "jun",
-		"juli": "july", "jul": "jul",
-		"agustus": "august", "aug": "aug",
-		"september": "september", "sep": "sep",
-		"oktober": "october", "oct": "oct",
-		"november": "november", "nov": "nov",
-		"desember": "december", "dec": "dec",
-	}
-
-	lowerDateStr := strings.ToLower(dateStr)
-	for indo, eng := range monthMap {
-		lowerDateStr = strings.ReplaceAll(lowerDateStr, indo, eng)
-	}
-
-	formats := []string{
-		"2006-01-02",
-		"02/01/2006",
-		"02-01-2006",
-		"2 January 2006",
-		"2 Jan 2006",
-		"02 Jan 2006",
-		"January 2, 2006",
-		"Jan 2, 2006",
-		"2 January 2006",
-		"02 January 2006",
-		"2/1/2006",
-		"02/1/2006",
-		"2-1-2006",
-		"02-1-2006",
-
-		"2 Januari 2006",
-		"02 Januari 2006",
-
-		"11 September 2025",
-		"11 Sep 2025",
-		"11-09-2025",
-		"11/09/2025",
-		"2025-09-11",
-	}
-
-	for _, format := range formats {
-		if parsedDate, err := time.Parse(format, lowerDateStr); err == nil {
-			if parsedDate.Format("2006-01-02") == todayStr {
-				return true
+	parenRe := regexp.MustCompile(`\(([A-Z]{2,6})\)`)
+	var results []string
+	for _, item := range items {
+		if isTargetDateImproved(item.Date, targetDate) && item.Text != "" {
+			if m := parenRe.FindStringSubmatch(item.Text); len(m) > 1 {
+				results = append(results, m[1])
 			}
 		}
 	}
-
-	patterns := []string{
-		`(\d{1,2})[/-](\d{1,2})[/-](\d{4})`,
-		`(\d{4})[/-](\d{1,2})[/-](\d{1,2})`,
-		`(\d{1,2})\s+\w+\s+(\d{4})`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(dateStr)
-		if len(matches) > 3 {
-
-			var day, month, year int
-
-			if strings.Contains(pattern, "YYYY") && strings.Index(pattern, "YYYY") == 1 {
-
-				year, _ = strconv.Atoi(matches[1])
-				month, _ = strconv.Atoi(matches[2])
-				day, _ = strconv.Atoi(matches[3])
-			} else {
-
-				day, _ = strconv.Atoi(matches[1])
-				month, _ = strconv.Atoi(matches[2])
-				year, _ = strconv.Atoi(matches[3])
-			}
-
-			if year > 0 && month > 0 && month <= 12 && day > 0 && day <= 31 {
-				parsedDate := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-				if parsedDate.Format("2006-01-02") == todayStr {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
+	return results, nil
 }
 
-func isDateTodayOrUpcoming(dateStr string) bool {
-	if dateStr == "" {
-		return false
-	}
-
-	today := time.Now()
-	thirtyDaysFromNow := today.AddDate(0, 0, 30)
-
-	formats := []string{
-		"02-Jan-2006",
-		"2-Jan-2006",
-		"02-01-2006",
-		"2-1-2006",
-		"02/01/2006",
-		"2/1/2006",
-		"2006-01-02",
-	}
-
-	for _, format := range formats {
-		if parsedDate, err := time.Parse(format, dateStr); err == nil {
-			if (parsedDate.After(today) || parsedDate.Equal(today)) && parsedDate.Before(thirtyDaysFromNow) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func scrapeUMADataImproved(client *http.Client) ([]string, error) {
-	url := "https://www.idx.co.id/en/news/unusual-market-activity-uma"
-
-	req, err := http.NewRequest("GET", url, nil)
+func scrapeSuspensiData(targetDate time.Time) ([]string, []string, error) {
+	items, err := scrapeIDXWithChromedp("https://www.idx.co.id/id/berita/suspensi", "", "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	req.Header.Set("DNT", "1")
-	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Cache-Control", "max-age=0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	log.Printf("UMA Response Status: %d", resp.StatusCode)
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var umaData []string
-
-	selectors := []string{
-		"table tbody tr",
-		"table tr",
-		".table tr",
-		"[class*='table'] tr",
-		".data-table tr",
-		".content table tr",
-		"#content table tr",
-	}
-
-	for _, selector := range selectors {
-		if len(umaData) > 0 {
-			break
-		}
-
-		doc.Find(selector).Each(func(i int, row *goquery.Selection) {
-			if i == 0 {
-				return
-			}
-
-			cells := row.Find("td, th")
-			if cells.Length() >= 2 {
-				dateText := strings.TrimSpace(cells.Eq(0).Text())
-				stockCode := strings.TrimSpace(cells.Eq(1).Text())
-
-				log.Printf("UMA Row %d: Date=%s, Code=%s", i, dateText, stockCode)
-
-				if isDateTodayImproved(dateText) && stockCode != "" && len(stockCode) <= 6 {
-
-					if matched, _ := regexp.MatchString("^[A-Z]{2,6}$", strings.ToUpper(stockCode)); matched {
-						umaData = append(umaData, strings.ToUpper(stockCode))
-						log.Printf("Added UMA: %s", stockCode)
-					}
-				}
-			}
-		})
-	}
-
-	if len(umaData) == 0 {
-		log.Println("No UMA data found with table selectors, trying alternative approaches...")
-
-		doc.Find("*").Each(func(i int, s *goquery.Selection) {
-			text := strings.TrimSpace(s.Text())
-			if strings.Contains(strings.ToLower(text), "september") && strings.Contains(text, "2025") {
-				log.Printf("Found potential UMA text: %s", text)
-
-				re := regexp.MustCompile(`\b([A-Z]{2,6})\b`)
-				matches := re.FindAllString(text, -1)
-				for _, match := range matches {
-					if len(match) >= 3 && len(match) <= 6 && match != "UMA" && match != "IDX" {
-						umaData = append(umaData, match)
-					}
-				}
-			}
-		})
-	}
-
-	return umaData, nil
-}
-
-func scrapeSuspensiDataImproved(client *http.Client) ([]string, error) {
-	url := "https://www.idx.co.id/id/berita/suspensi"
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	log.Printf("Suspensi Response Status: %d", resp.StatusCode)
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var suspensiData []string
-
-	selectors := []string{
-		"table tbody tr",
-		"table tr",
-		".table tr",
-		"[class*='table'] tr",
-	}
-
-	for _, selector := range selectors {
-		doc.Find(selector).Each(func(i int, row *goquery.Selection) {
-			if i == 0 {
-				return
-			}
-
-			cells := row.Find("td")
-			if cells.Length() >= 3 {
-				dateText := strings.TrimSpace(cells.Eq(0).Text())
-				stockCode := strings.TrimSpace(cells.Eq(1).Text())
-				status := strings.TrimSpace(cells.Eq(2).Text())
-
-				log.Printf("Suspensi Row %d: Date=%s, Code=%s, Status=%s", i, dateText, stockCode, status)
-
-				if isDateTodayImproved(dateText) && stockCode != "" {
-					statusLower := strings.ToLower(status)
-
-					if strings.Contains(statusLower, "suspensi") || strings.Contains(statusLower, "suspend") {
-						if !strings.Contains(statusLower, "batal") && !strings.Contains(statusLower, "unsuspend") {
-							if matched, _ := regexp.MatchString("^[A-Z]{2,6}$", strings.ToUpper(stockCode)); matched {
-								suspensiData = append(suspensiData, strings.ToUpper(stockCode))
-								log.Printf("Added Suspensi: %s", stockCode)
-							}
-						}
-					}
-				}
-			}
-		})
-	}
-
-	return suspensiData, nil
-}
-
-func scrapeRUPSDataImproved(client *http.Client) ([]string, error) {
-	url := "https://www.new.sahamidx.com/?/rups"
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,id;q=0.8")
-
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Connection", "keep-alive")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	log.Printf("RUPS Response Status: %d", resp.StatusCode)
-
-	if resp.StatusCode != 200 {
-		log.Printf("RUPS non-200 status code: %d", resp.StatusCode)
-		return []string{}, nil
-	}
-
-	var reader io.Reader = resp.Body
-	encoding := resp.Header.Get("Content-Encoding")
-	log.Printf("RUPS Content-Encoding: %s", encoding)
-
-	if encoding == "gzip" {
-		gzipReader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
-		}
-		defer gzipReader.Close()
-		reader = gzipReader
-		log.Printf("RUPS Using gzip decompression")
-	}
-
-	doc, err := goquery.NewDocumentFromReader(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	htmlContent, _ := doc.Html()
-	log.Printf("RUPS HTML length: %d characters", len(htmlContent))
-
-	title := doc.Find("title").Text()
-	log.Printf("RUPS Page title: %s", title)
-
-	bodyText := doc.Find("body").Text()
-	if strings.Contains(strings.ToUpper(bodyText), "RUPS") {
-		log.Printf("Found RUPS-related text in body")
-	} else {
-		log.Printf("No RUPS-related text found in body")
-	}
-
-	scriptCount := doc.Find("script").Length()
-	log.Printf("RUPS Found %d script tags", scriptCount)
-
-	var rupsData []string
-
-	tableCount := doc.Find("table").Length()
-	log.Printf("Found %d tables on RUPS page", tableCount)
-
-	selectors := []string{
-		"table tbody tr",
-		"table tr",
-	}
-
-	for _, selector := range selectors {
-		log.Printf("Trying RUPS selector: %s", selector)
-		rows := doc.Find(selector)
-		log.Printf("Found %d rows with selector: %s", rows.Length(), selector)
-
-		if rows.Length() > 0 {
-			rows.Each(func(i int, row *goquery.Selection) {
-				cells := row.Find("td")
-				log.Printf("RUPS Row %d has %d cells", i, cells.Length())
-
-				if cells.Length() >= 6 {
-
-					companyName := strings.TrimSpace(cells.Eq(0).Text())
-					stockCode := strings.TrimSpace(cells.Eq(1).Text())
-					rupsDate := strings.TrimSpace(cells.Eq(2).Text())
-					rupsTime := strings.TrimSpace(cells.Eq(3).Text())
-					place := strings.TrimSpace(cells.Eq(4).Text())
-					recordingDate := strings.TrimSpace(cells.Eq(5).Text())
-
-					log.Printf("RUPS Row %d: Company=%s, Code=%s, Date=%s, Time=%s, Place=%s, RecDate=%s",
-						i, companyName, stockCode, rupsDate, rupsTime, place, recordingDate)
-
-					if stockCode != "" && rupsDate != "" {
-
-						if matched, _ := regexp.MatchString("^[A-Z]{2,6}$", strings.ToUpper(stockCode)); matched {
-							rupsData = append(rupsData, strings.ToUpper(stockCode))
-							log.Printf("Added RUPS: %s - %s on %s", stockCode, companyName, rupsDate)
-						}
-					}
-				}
-			})
-
-			if len(rupsData) > 0 {
-				break
-			}
-		}
-	}
-
-	log.Printf("Total RUPS data found: %d", len(rupsData))
-	return rupsData, nil
-}
-
-func extractStockCodeFromDescriptionImproved(description string) string {
-
-	patterns := []string{
-		`(PT\.?\s+[A-Z\s]{3,50}\s+TBK)`,
-		`(PT\.?\s+[A-Z\s]{3,50})(?:\s+\()`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(description)
-		if len(matches) > 1 {
-			companyName := strings.TrimSpace(matches[1])
-
-			companyName = strings.ReplaceAll(companyName, "PT.", "PT")
-			companyName = regexp.MustCompile(`\s+`).ReplaceAllString(companyName, " ")
-			return companyName
-		}
-	}
-
-	return strings.TrimSpace(description)
-}
-
-func scrapeDividendDataImproved(client *http.Client) ([]domain.DividendData, error) {
-
-	client.Timeout = 60 * time.Second
-
-	urls := []string{
-		"https://www.new.sahamidx.com/?/deviden",
-		"https://www.new.sahamidx.com/deviden",
-		"https://new.sahamidx.com/?/deviden",
-		"https://new.sahamidx.com/deviden",
-	}
-
-	for _, url := range urls {
-		log.Printf("Trying dividend URL: %s", url)
-		data, err := scrapeDividendFromURL(client, url)
-		if err != nil {
-			log.Printf("Error with URL %s: %v", url, err)
+	parenRe := regexp.MustCompile(`\(([A-Z]{2,6})\)`)
+	var suspensi, unsuspensi []string
+
+	for _, item := range items {
+		if !isTargetDateImproved(item.Date, targetDate) || item.Text == "" {
 			continue
 		}
-		if len(data) > 0 {
-			log.Printf("Successfully got %d dividend records from %s", len(data), url)
-			return data, nil
+
+		low := strings.ToLower(item.Text)
+		isS := strings.Contains(low, "penghentian sementara") || strings.Contains(low, "suspensi")
+		isU := strings.Contains(low, "pembukaan kembali") || strings.Contains(low, "pencabutan") || strings.Contains(low, "dibuka")
+
+		if !isS && !isU {
+			continue
+		}
+
+		if m := parenRe.FindStringSubmatch(item.Text); len(m) > 1 {
+			code := m[1]
+			if isU {
+				unsuspensi = append(unsuspensi, code)
+			} else {
+				suspensi = append(suspensi, code)
+			}
 		}
 	}
-
-	log.Printf("No dividend data found from any URL")
-	return []domain.DividendData{}, nil
+	return suspensi, unsuspensi, nil
 }
 
-func scrapeDividendFromURL(client *http.Client, url string) ([]domain.DividendData, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func scrapeRUPSData(client *http.Client, targetDate time.Time) ([]string, error) {
+	var results []string
+	seen := make(map[string]bool)
+
+	// Fetch up to 10 pages to ensure we catch the target date (pagination uses /page/X)
+	for p := 1; p <= 10; p++ {
+		url := "https://www.new.sahamidx.com/?/rups"
+		if p > 1 {
+			url = fmt.Sprintf("https://www.new.sahamidx.com/?/rups/page/%d", p)
+		}
+
+		doc, err := fetchGoQuery(client, url)
+		if err != nil {
+			log.Printf("[RUPS] Error fetching page %d: %v", p, err)
+			continue
+		}
+
+		foundOnPage := false
+		doc.Find("table tbody tr").Each(func(i int, row *goquery.Selection) {
+			cells := row.Find("td")
+			if cells.Length() >= 6 {
+				code := strings.TrimSpace(cells.Eq(1).Text())
+				date := strings.TrimSpace(cells.Eq(2).Text())
+				if code != "" && isTargetDateImproved(date, targetDate) {
+					uCode := strings.ToUpper(code)
+					if !seen[uCode] {
+						results = append(results, uCode)
+						seen[uCode] = true
+						foundOnPage = true
+					}
+				}
+			}
+		})
+
+		// If we haven't found anything yet across several pages, we keep looking
+		// But if we FOUND something and now we don't, we might have passed the date block
+		if p > 5 && !foundOnPage && len(results) > 0 {
+			break
+		}
+	}
+	return results, nil
+}
+
+func scrapeDividendData(client *http.Client, targetDate time.Time) ([]domain.DividendData, error) {
+	var results []domain.DividendData
+	seen := make(map[string]bool)
+
+	for p := 1; p <= 10; p++ {
+		url := "https://www.new.sahamidx.com/?/deviden"
+		if p > 1 {
+			url = fmt.Sprintf("https://www.new.sahamidx.com/?/deviden/page/%d", p)
+		}
+
+		doc, err := fetchGoQuery(client, url)
+		if err != nil {
+			log.Printf("[Dividend] Error fetching page %d: %v", p, err)
+			continue
+		}
+
+		doc.Find("table tbody tr").Each(func(i int, row *goquery.Selection) {
+			cells := row.Find("td")
+			if cells.Length() >= 6 {
+				code := strings.TrimSpace(cells.Eq(0).Text())
+				amt := strings.TrimSpace(cells.Eq(1).Text())
+				cum := strings.TrimSpace(cells.Eq(2).Text())
+				ex := strings.TrimSpace(cells.Eq(3).Text())
+
+				if code != "" && code != "Deviden Saham" {
+					if isTargetDateImproved(cum, targetDate) || isTargetDateImproved(ex, targetDate) {
+						uCode := strings.ToUpper(code)
+						if !seen[uCode] {
+							results = append(results, domain.DividendData{
+								Code: uCode, Amount: amt, CumDate: cum, ExDate: ex,
+								Yield: "N/A", Price: "N/A",
+							})
+							seen[uCode] = true
+						}
+					}
+				}
+			}
+		})
+	}
+	return results, nil
+}
+
+// --- Headless Browser Logic ---
+
+func scrapeIDXWithChromedp(pageURL, _, _ string) ([]idxNuxtItem, error) {
+	js := `
+(function() {
+	var best = null; var max = 0;
+	function s(o, d) {
+		if (d > 12 || !o || typeof o !== 'object') return;
+		if (Array.isArray(o)) {
+			if (o.length > 2 && o[0] && typeof o[0] === 'object') {
+				var keys = Object.keys(o[0]).join(',');
+				if (keys.includes('Date') || keys.includes('Judul') || keys.includes('Pengumuman')) {
+					if (o.length > max) { best = o; max = o.length; }
+				}
+			}
+			o.forEach(x => s(x, d + 1));
+		} else {
+			for (var k in o) { try { s(o[k], d + 1); } catch(e) {} }
+		}
+	}
+	var srcs = [window.__NUXT__, window.__NUXT_DATA__, window.__nuxt__];
+	srcs.forEach(x => { if(x) s(x, 0); });
+	if (!best) return "[]";
+	return JSON.stringify(best.map(x => ({
+		text: x.Judul || x.Pengumuman || x.JudulEn || x.PengumumanEn || x.Text || x.Title || "",
+		date: x.Date || x.PublishDate || x.CreatedDate || x.SuspensiDate || x.UMADate || x.date || ""
+	})));
+})()`
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer allocCancel()
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+	ctx, tcancel := context.WithTimeout(ctx, 50*time.Second)
+	defer tcancel()
+
+	// Hide webdriver attribute
+	chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := page.AddScriptToEvaluateOnNewDocument("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})").Do(ctx)
+		return err
+	}))
+
+	var res string
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(pageURL),
+		chromedp.Sleep(5*time.Second),
+		chromedp.Evaluate(js, &res),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,id;q=0.8")
+	var items []idxNuxtItem
+	if err := json.Unmarshal([]byte(res), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Connection", "keep-alive")
-
+func fetchGoQuery(client *http.Client, url string) (*goquery.Document, error) {
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	log.Printf("Dividend Response Status: %d for URL: %s", resp.StatusCode, url)
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
+	var r io.Reader = resp.Body
+	if strings.Contains(resp.Header.Get("Content-Encoding"), "gzip") {
+		gz, _ := gzip.NewReader(resp.Body)
+		defer gz.Close()
+		r = gz
 	}
-
-	var reader io.Reader = resp.Body
-	encoding := resp.Header.Get("Content-Encoding")
-	log.Printf("Content-Encoding: %s", encoding)
-
-	if encoding == "gzip" {
-		gzipReader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
-		}
-		defer gzipReader.Close()
-		reader = gzipReader
-		log.Printf("Using gzip decompression")
-	}
-
-	doc, err := goquery.NewDocumentFromReader(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	htmlContent, _ := doc.Html()
-	log.Printf("HTML length: %d characters", len(htmlContent))
-
-	title := doc.Find("title").Text()
-	log.Printf("Page title: %s", title)
-
-	bodyText := doc.Find("body").Text()
-	if strings.Contains(strings.ToLower(bodyText), "dividen") || strings.Contains(strings.ToLower(bodyText), "dividend") {
-		log.Printf("Found dividend-related text in body")
-	} else {
-		log.Printf("No dividend-related text found in body")
-
-		if len(bodyText) > 500 {
-			log.Printf("Body preview: %s...", bodyText[:500])
-		} else {
-			log.Printf("Full body: %s", bodyText)
-		}
-
-	}
-
-	var dividendData []domain.DividendData
-
-	tableCount := doc.Find("table").Length()
-	log.Printf("Found %d tables on dividend page", tableCount)
-
-	selectors := []string{
-		"table.demo-table tbody tr",
-		"table tbody tr",
-		"table tr",
-		".demo-table tbody tr",
-		".demo-table tr",
-	}
-
-	for _, selector := range selectors {
-		log.Printf("Trying selector: %s", selector)
-		rows := doc.Find(selector)
-		log.Printf("Found %d rows with selector: %s", rows.Length(), selector)
-
-		if rows.Length() > 0 {
-			rows.Each(func(i int, row *goquery.Selection) {
-				cells := row.Find("td")
-				log.Printf("Row %d has %d cells", i, cells.Length())
-
-				if cells.Length() >= 6 {
-
-					stockCode := strings.TrimSpace(cells.Eq(0).Text())
-					amount := strings.TrimSpace(cells.Eq(1).Text())
-					cumDate := strings.TrimSpace(cells.Eq(2).Text())
-					exDate := strings.TrimSpace(cells.Eq(3).Text())
-					_ = strings.TrimSpace(cells.Eq(4).Text())
-					_ = strings.TrimSpace(cells.Eq(5).Text())
-
-					log.Printf("Dividend Row %d: Code=%s, Amount=%s, CumDate=%s, ExDate=%s",
-						i, stockCode, amount, cumDate, exDate)
-
-					if stockCode != "" && amount != "" && stockCode != "Deviden Saham" {
-						dividend := domain.DividendData{
-							Code:    stockCode,
-							Amount:  amount,
-							Yield:   "N/A",
-							Price:   "N/A",
-							CumDate: cumDate,
-							ExDate:  exDate,
-						}
-						dividendData = append(dividendData, dividend)
-						log.Printf("Added Dividend: %s - %s (Cum: %s, Ex: %s)", stockCode, amount, cumDate, exDate)
-					}
-				}
-			})
-
-			if len(dividendData) > 0 {
-				break
-			}
-		}
-	}
-
-	if len(dividendData) == 0 {
-		log.Printf("No data found with table selectors, trying aggressive parsing...")
-
-		doc.Find("tr").Each(func(i int, row *goquery.Selection) {
-			cells := row.Find("td")
-			if cells.Length() >= 6 {
-				stockCode := strings.TrimSpace(cells.Eq(0).Text())
-				amount := strings.TrimSpace(cells.Eq(1).Text())
-				cumDate := strings.TrimSpace(cells.Eq(2).Text())
-				exDate := strings.TrimSpace(cells.Eq(3).Text())
-				_ = strings.TrimSpace(cells.Eq(4).Text())
-				_ = strings.TrimSpace(cells.Eq(5).Text())
-
-				log.Printf("Aggressive parse Row %d: Code='%s', Amount='%s', CumDate='%s', ExDate='%s'",
-					i, stockCode, amount, cumDate, exDate)
-
-				if len(stockCode) >= 2 && len(stockCode) <= 6 &&
-					stockCode != "Deviden Saham" && stockCode != "Nama" &&
-					amount != "" && amount != "Amount" {
-
-					if matched, _ := regexp.MatchString(`^[\d.,]+$`, amount); matched {
-						dividend := domain.DividendData{
-							Code:    strings.ToUpper(stockCode),
-							Amount:  amount,
-							Yield:   "N/A",
-							Price:   "N/A",
-							CumDate: cumDate,
-							ExDate:  exDate,
-						}
-						dividendData = append(dividendData, dividend)
-						log.Printf("Added Aggressive Dividend: %s - %s", stockCode, amount)
-					}
-				}
-			}
-		})
-
-		doc.Find("td[data-header='Nama']").Each(func(i int, cell *goquery.Selection) {
-			row := cell.Parent()
-			cells := row.Find("td")
-			if cells.Length() >= 6 {
-				stockCode := strings.TrimSpace(cells.Eq(0).Text())
-				amount := strings.TrimSpace(cells.Eq(1).Text())
-				cumDate := strings.TrimSpace(cells.Eq(2).Text())
-				exDate := strings.TrimSpace(cells.Eq(3).Text())
-
-				log.Printf("Data-header parse Row %d: Code='%s', Amount='%s'", i, stockCode, amount)
-
-				if stockCode != "" && amount != "" {
-					dividend := domain.DividendData{
-						Code:    strings.ToUpper(stockCode),
-						Amount:  amount,
-						Yield:   "N/A",
-						Price:   "N/A",
-						CumDate: cumDate,
-						ExDate:  exDate,
-					}
-					dividendData = append(dividendData, dividend)
-					log.Printf("Added Data-header Dividend: %s - %s", stockCode, amount)
-				}
-			}
-		})
-	}
-
-	log.Printf("Total dividend data found: %d", len(dividendData))
-	return dividendData, nil
+	return goquery.NewDocumentFromReader(r)
 }
 
-func extractDividendInfoImproved(description string) (string, string) {
-	companyName := ""
+// --- Utilities ---
 
-	patterns := []string{
-		`(PT\.?\s+[A-Z\s]{3,50})(?:\s+\([A-Z]+\)|$)`,
-		`(PT\.?\s+[A-Z\s]{3,50}\s+TBK)`,
+func isTargetDateImproved(dateStr string, targetDate time.Time) bool {
+	if dateStr == "" {
+		return false
+	}
+	loc := time.FixedZone("WIB", 7*3600)
+	targetStr := targetDate.In(loc).Format("2006-01-02")
+
+	val := strings.ToLower(strings.TrimSpace(dateStr))
+	monthMap := map[string]string{
+		"januari": "January", "jan": "Jan", "februari": "February", "feb": "Feb", "pebruari": "February", "peb": "Feb",
+		"maret": "March", "mar": "Mar", "april": "April", "apr": "Apr",
+		"mei": "May", "may": "May", "juni": "June", "jun": "Jun",
+		"juli": "July", "jul": "Jul", "agustus": "August", "agu": "Aug", "agt": "Aug",
+		"september": "September", "sep": "Sep", "oktober": "October", "okt": "Oct", "oct": "Oct",
+		"november": "November", "nov": "Nov", "desember": "December", "des": "Dec", "dec": "Dec",
+	}
+	for k, v := range monthMap {
+		val = strings.ReplaceAll(val, k, v)
 	}
 
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(description)
-		if len(matches) > 1 {
-			companyName = strings.TrimSpace(matches[1])
+	formats := []string{
+		"2006-01-02T15:04:05", "2006-01-02", "02-Jan-2006", "2-Jan-2006", "2-Jan-06",
+		"02/01/2006", "02-01-2006", "2 January 2006", "2 Jan 2006", "02 January 2006", "02 Jan 2006",
+	}
 
-			companyName = strings.ReplaceAll(companyName, "PT.", "PT")
-			companyName = regexp.MustCompile(`\s+`).ReplaceAllString(companyName, " ")
-			break
+	for _, f := range formats {
+		if t, err := time.Parse(f, strings.TrimSpace(dateStr)); err == nil {
+			if t.Format("2006-01-02") == targetStr {
+				return true
+			}
+		}
+		if t, err := time.Parse(f, val); err == nil {
+			if t.Format("2006-01-02") == targetStr {
+				return true
+			}
 		}
 	}
 
-	if companyName == "" {
-
-		if strings.Contains(strings.ToUpper(description), "UNTUNG TUMBUH BERSAMA") {
-			companyName = "PT UNTUNG TUMBUH BERSAMA"
-		} else if strings.Contains(strings.ToUpper(description), "MNC DIGITAL") {
-			companyName = "PT MNC DIGITAL ENTERTAINMENT Tbk"
-		} else {
-
-			companyName = strings.TrimSpace(description)
+	// Day Month Year (ID full)
+	parts := strings.Fields(val)
+	if len(parts) >= 3 {
+		day, _ := strconv.Atoi(parts[0])
+		year, _ := strconv.Atoi(parts[len(parts)-1])
+		if year > 0 && day > 0 {
+			for k, v := range monthMap {
+				if strings.Contains(val, k) {
+					if t, err := time.Parse("January 2, 2006", fmt.Sprintf("%s %d, %d", v, day, year)); err == nil {
+						if t.Format("2006-01-02") == targetStr {
+							return true
+						}
+					}
+				}
+			}
 		}
 	}
 
-	dividendAmount := "N/A"
-	amountPatterns := []string{
-		`Rp\s*([\d,\.]+(?:\.\d{2})?)`,
-		`IDR\s*([\d,\.]+(?:\.\d{2})?)`,
-		`(\d+(?:\.\d+)?)\s*rupiah`,
-		`dividend.*?(\d+(?:\.\d+)?)`,
-		`sebesar\s*Rp\s*([\d,\.]+)`,
-		`amount.*?(\d+(?:\.\d+)?)`,
-	}
-
-	for _, pattern := range amountPatterns {
-		amountRe := regexp.MustCompile(`(?i)` + pattern)
-		amountMatches := amountRe.FindStringSubmatch(description)
-		if len(amountMatches) > 1 {
-			dividendAmount = "Rp " + amountMatches[1]
-			break
-		}
-	}
-
-	return companyName, dividendAmount
+	return false
 }
 
 func FormatIDXResponse(data *domain.IDXData) string {
-	var response strings.Builder
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[IDX Market Data for %s]\n\n", data.Date))
 
-	response.WriteString("[IDX Market Data for " + data.Date + "]\n\n")
-
-	response.WriteString("[RUPS]\n")
-	if len(data.RUPS) > 0 {
-		for _, code := range data.RUPS {
-			response.WriteString(code + "\n")
+	writeSec := func(title string, items []string) {
+		sb.WriteString("[" + title + "]\n")
+		if len(items) == 0 {
+			sb.WriteString("-\n")
 		}
-	} else {
-		response.WriteString("-\n")
-	}
-	response.WriteString("\n")
-
-	response.WriteString("[UMA]\n")
-	if len(data.UMA) > 0 {
-		for _, code := range data.UMA {
-			response.WriteString(code + "\n")
+		for _, v := range items {
+			sb.WriteString(v + "\n")
 		}
-	} else {
-		response.WriteString("-\n")
+		sb.WriteString("\n")
 	}
-	response.WriteString("\n")
 
-	response.WriteString("[Unsuspensi]\n")
-	response.WriteString("-\n")
-	response.WriteString("\n")
+	writeSec("RUPS", data.RUPS)
+	writeSec("UMA", data.UMA)
+	writeSec("Unsuspensi", data.Unsuspensi)
+	writeSec("Suspensi", data.Suspensi)
 
-	response.WriteString("[Suspensi]\n")
-	if len(data.Suspensi) > 0 {
-		for _, code := range data.Suspensi {
-			response.WriteString(code + "\n")
-		}
+	sb.WriteString("[DIVIDEND]\n")
+	if len(data.Dividend) == 0 {
+		sb.WriteString("-\n")
 	} else {
-		response.WriteString("-\n")
-	}
-	response.WriteString("\n")
-
-	response.WriteString("[DIVIDEND]\n")
-	if len(data.Dividend) > 0 {
-		for _, div := range data.Dividend {
-			response.WriteString(fmt.Sprintf("%s (Div. Rp %s)\n", div.Code, div.Amount))
-			if div.Yield != "N/A" && div.Price != "N/A" {
-				response.WriteString(fmt.Sprintf("Yield: %s (Price: Rp %s)\n", div.Yield, div.Price))
+		for _, d := range data.Dividend {
+			sb.WriteString(fmt.Sprintf("%s (Div. Rp %s)\n", d.Code, d.Amount))
+			if d.CumDate != "" && d.CumDate != "N/A" {
+				sb.WriteString("Cum: " + d.CumDate + "\n")
 			}
-			if div.CumDate != "" && div.CumDate != "N/A" {
-				response.WriteString(fmt.Sprintf("Cum Date: %s\n", div.CumDate))
+			if d.ExDate != "" && d.ExDate != "N/A" {
+				sb.WriteString("Ex: " + d.ExDate + "\n")
 			}
-			if div.ExDate != "" && div.ExDate != "N/A" {
-				response.WriteString(fmt.Sprintf("Ex Date: %s\n", div.ExDate))
-			}
-			response.WriteString("\n")
-		}
-	} else {
-		response.WriteString("-\n")
-	}
-
-	return response.String()
-}
-
-func TestIDXScrapingDetailed() {
-	log.Println("[IDX] Starting detailed IDX scraping test...")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	today := time.Now().Format("2006-01-02")
-
-	log.Printf("[IDX] Today's date: %s", today)
-	log.Printf("[IDX] Current time: %s", time.Now().Format("15:04:05"))
-
-	log.Println("\n=== TESTING UMA ===")
-	testSingleEndpoint(client, "https://www.idx.co.id/en/news/unusual-market-activity-uma", "UMA")
-
-	log.Println("\n=== TESTING SUSPENSI ===")
-	testSingleEndpoint(client, "https://www.idx.co.id/id/berita/suspensi", "SUSPENSI")
-
-	log.Println("\n=== TESTING RUPS ===")
-	testSingleEndpoint(client, "https://www.new.sahamidx.com/?/rups", "RUPS")
-
-	log.Println("\n=== TESTING DIVIDEND ===")
-	testSingleEndpoint(client, "https://www.new.sahamidx.com/?/deviden", "DIVIDEND")
-
-	log.Println("\n=== RUNNING FULL SCRAPE ===")
-	data, err := GetIDXMarketData()
-	if err != nil {
-		log.Printf("[Error]: %v", err)
-		return
-	}
-
-	response := FormatIDXResponse(data)
-	log.Println("[IDX] Final Response:")
-	log.Println(response)
-}
-
-func testSingleEndpoint(client *http.Client, url, name string) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Printf("[Error] %s - Request error: %v", name, err)
-		return
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[Error] %s - Connection error: %v", name, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	log.Printf("[IDX] %s - Status: %d %s", name, resp.StatusCode, resp.Status)
-
-	if resp.StatusCode != 200 {
-		log.Printf("[Warning] %s - Non-200 status code", name)
-		return
-	}
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		log.Printf("[Error] %s - Parse error: %v", name, err)
-		return
-	}
-
-	tablesCount := doc.Find("table").Length()
-	log.Printf("[IDX] %s - Found %d tables", name, tablesCount)
-
-	if tablesCount == 0 {
-		log.Printf("[Warning] %s - No tables found, checking alternative structures", name)
-		log.Printf("[IDX] %s - Divs with 'table' class: %d", name, doc.Find("div[class*='table']").Length())
-		log.Printf("[IDX] %s - Elements with 'data' class: %d", name, doc.Find("[class*='data']").Length())
-
-		title := doc.Find("title").Text()
-		log.Printf("[IDX] %s - Page title: %s", name, title)
-
-		bodyText := doc.Find("body").Text()
-		if len(bodyText) < 100 {
-			log.Printf("[Warning] %s - Very little content found, possible JS-rendered page", name)
+			sb.WriteString("\n")
 		}
 	}
-
-	if tablesCount > 0 {
-		firstTable := doc.Find("table").First()
-		rows := firstTable.Find("tr")
-		log.Printf("[IDX] %s - First table has %d rows", name, rows.Length())
-
-		if rows.Length() > 0 {
-			headerCells := rows.First().Find("th, td")
-			log.Printf("[IDX] %s - Header has %d columns", name, headerCells.Length())
-
-			headerCells.Each(func(i int, cell *goquery.Selection) {
-				text := strings.TrimSpace(cell.Text())
-				log.Printf("  [IDX] %s - Column %d: %s", name, i+1, text)
-			})
-		}
-	}
+	return sb.String()
 }
