@@ -402,7 +402,10 @@ func handleIDXCommand(v *events.Message, originalMessage string) {
 	}
 
 	if dateStr != "" {
-		loc, _ := time.LoadLocation("Asia/Jakarta")
+		loc, err := time.LoadLocation("Asia/Jakarta")
+		if err != nil {
+			loc = time.FixedZone("WIB", 7*3600)
+		}
 
 		monthMap := map[string]string{
 			"januari": "January", "jan": "Jan", "februari": "February", "feb": "Feb",
